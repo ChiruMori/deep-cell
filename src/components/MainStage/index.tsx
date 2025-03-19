@@ -19,6 +19,9 @@ extend({
     EventSystem
 })
 
+// 初始未分化细胞个数
+const CANCER_CNT = 200
+
 const MainStage = ({ setCnt, setCells, cells, setSelectedCell }: {
     cells: ICell[],
     setCells: (value: SetStateAction<ICell[]>) => void,
@@ -60,8 +63,22 @@ const MainStage = ({ setCnt, setCells, cells, setSelectedCell }: {
         })
     }, [cells])
 
+    const [ws] = useState(() => new WebSocket('ws://localhost:8000/training/tick'));
+
+    useEffect(() => {
+        ws.onmessage = (event) => {
+            const responses = JSON.parse(event.data);
+            cells.forEach(cell => {
+                const res = responses.find((r: ICell) => r.id === cell.id);
+                Cells.changeAcc(cell, res.strength, res.angle);
+            });
+        };
+        return () => {
+            ws.close();
+        };
+    }, [ws, setCells]);
+
     const tickCallback = useCallback(() => {
-        // 通过函数式更新获取最新cells
         setCells(currentCells => {
             if (!currentCells || currentCells.length === 0) {
                 return currentCells;
@@ -74,12 +91,19 @@ const MainStage = ({ setCnt, setCells, cells, setSelectedCell }: {
                 erythrocyte: 0,
                 alveolar: 0,
             } as CellTypeCounter
+            
+            // 批量收集所有细胞数据
+            const batchData = currentCells.map(cell => ({
+                id: cell.id,
+                vision_surround: cell.view,
+                hp: cell.hp,
+                life: cell.life
+            }));
+
+            // 发送批量请求
+            ws.send(JSON.stringify(batchData));
 
             const newCells = currentCells.filter((cell) => {
-                // 随机改变cell的加速度（由深度学习输出）
-                const force = Math.random()
-                const angle = Math.random() * Math.PI * 2
-                Cells.changeAcc(cell, force, angle)
                 // 更新
                 Cells.collide(cell, currentCells)
                 Cells.move(cell)
@@ -103,17 +127,10 @@ const MainStage = ({ setCnt, setCells, cells, setSelectedCell }: {
     }, [setCells, setCnt])
 
     const initCells = useCallback(() => {
-        setCells(prev => {
-            const newCells = [...prev];
-            // 保留现有细胞并追加新细胞
-            for (let i = 0; i < 10; i++) {
-                newCells.push(Cells.create({
-                    x: Math.random() * 800,
-                    y: Math.random() * 600,
-                    r: Cells.typeProperties('stem').radius
-                }, 'stem'));
-            }
-            for (let i = 0; i < 10; i++) {
+        setCells(_ => {
+            const newCells = [] as ICell[]
+            // 初始化未分化细胞
+            for (let i = 0; i < CANCER_CNT; i++) {
                 newCells.push(Cells.create({
                     x: Math.random() * 800,
                     y: Math.random() * 600,

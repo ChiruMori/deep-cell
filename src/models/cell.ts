@@ -1,5 +1,6 @@
 /// <reference path="cell.d.ts" />
 
+const SPEED_DECAY = 0.98;
 const cellTypesConfig: Record<CellType, CellTypeProperties> = {
     'stem': {
         maxAcc: 0.1,
@@ -55,8 +56,9 @@ export const Cells = {
     }),
 
     move: (cell: ICell): void => {
-        cell.xSpeed = cell.xSpeed + cell.xAcc
-        cell.ySpeed = cell.ySpeed + cell.yAcc
+        // 速度自带衰减
+        cell.xSpeed = cell.xSpeed * SPEED_DECAY + cell.xAcc
+        cell.ySpeed = cell.ySpeed * SPEED_DECAY + cell.yAcc
         // 超速限制
         if (cell.xSpeed > typeProperties(cell.type).maxSpeed) {
             cell.xSpeed = typeProperties(cell.type).maxSpeed
