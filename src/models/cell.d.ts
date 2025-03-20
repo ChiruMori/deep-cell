@@ -18,8 +18,11 @@ declare interface ICell extends ICircle, IMovable {
     type: CellType;
     life: number;
     hp: number;
-    view: CellType[];
+    surround: number[];
     id: string;
+    sonCnt: number;
+    lifeTime: number;
+    feed: number;
 }
 
 // 细胞类型

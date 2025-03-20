@@ -15,4 +15,8 @@ class StemNetwork(nn.Module):
         )
 
     def forward(self, x):
+        # 确保输入张量的形状正确
+        if x.dim() == 1:
+            # 如果是一维张量，将其转换为二维张量 (1, 8)
+            x = x.unsqueeze(0)
         return self.fc(x)

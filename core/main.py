@@ -17,9 +17,17 @@ from contextlib import asynccontextmanager
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     # 在应用启动时执行
+    print("初始化 Ray...")
     ray.init()
     init_ray.remote()
     yield
+    # 应用关闭时执行清理操作
+    print("关闭 Ray...")
+    ray.shutdown()
+
+# 将 lifespan 函数应用到 FastAPI 应用
+app = FastAPI(lifespan=lifespan)
+app.include_router(training_router)
 
 if __name__ == "__main__":
     import uvicorn

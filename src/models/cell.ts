@@ -1,6 +1,7 @@
 /// <reference path="cell.d.ts" />
 
-const SPEED_DECAY = 0.98;
+const SPEED_DECAY = 0.95;
+const HEAL_CNT = 100;
 const cellTypesConfig: Record<CellType, CellTypeProperties> = {
     'stem': {
         maxAcc: 0.1,
@@ -35,6 +36,20 @@ const cellTypesConfig: Record<CellType, CellTypeProperties> = {
         hp: 10000
     },
 };
+const typeAsNumber = (type: CellType | null): number => {
+    switch (type) {
+        case 'stem':
+            return 1;
+        case 'cancer':
+            return 2;
+        case 'erythrocyte':
+            return 3;
+        case 'alveolar':
+            return 4;
+        default:
+            return 0;
+    }
+}
 const typeProperties = (type: CellType): CellTypeProperties => cellTypesConfig[type];
 export const Cells = {
     checkHit: (cell: ICell, x: number, y: number): boolean => {
@@ -51,8 +66,11 @@ export const Cells = {
         type,
         life: typeProperties(type).life * Math.random() * 1.1,
         hp: typeProperties(type).hp * Math.random() * 1.1,
-        view: [],
+        surround: [-1, -1, -1, -1, -1, -1],
         id: Math.random().toString(36).substring(2, 15),
+        sonCnt: 0,
+        lifeTime: 0,
+        feed: 0,
     }),
 
     move: (cell: ICell): void => {
@@ -111,24 +129,27 @@ export const Cells = {
                 return
             }
             // 红细胞、肺泡会将自身 hp 分给除与自己不同类型的细胞
+            cell.feed = 0
             if ((cell.type === 'erythrocyte' || cell.type === 'alveolar')
                 && (cell.hp > typeProperties(other.type).hp)
                 && (cell.type !== other.type)) {
                 const feed = typeProperties(other.type).hp - other.hp
                 other.hp += feed
+                cell.feed = feed
             }
             nearbyCells.push(other)
             const distance = Math.sqrt(Math.pow(cell.x - other.x, 2) + Math.pow(cell.y - other.y, 2))
             if (distance < dd / 2) {
                 const angle = Math.atan2(other.y - cell.y, other.x - cell.x)
-                const force = (dd / 2 - distance) / cell.r / cell.r
-                cell.xAcc = cell.xAcc - force * Math.cos(angle)
-                cell.yAcc = cell.yAcc - force * Math.sin(angle)
+                const force = (distance - dd / 2) / cell.r / cell.r / 2
+                // 追加在速度上
+                cell.xSpeed += force * Math.cos(angle)
+                cell.ySpeed += force * Math.sin(angle)
             }
         })
         // 每个细胞有 6 个视线，以细胞中心向 6 个方向发射射线，每个射线夹角60°
         // 射线接触到的细胞为该视线的目标细胞（不要求严格第一个细胞）
-        cell.view = []
+        cell.surround = []
         for (let i = 0; i < 6; i++) {
             const angle = i * Math.PI / 3
             const x = cell.x + Math.cos(angle) * cell.r
@@ -161,27 +182,26 @@ export const Cells = {
                     targetCell = other
                 }
             })
-            if (targetCell) {
-                cell.view.push(targetCell.type)
-            }
+            cell.surround.push(targetCell ? typeAsNumber(targetCell.type) : 0)
         }
     },
 
     actions: {
         step: (cell: ICell): ICell | null => {
+            cell.lifeTime += 1
             cell.life = cell.life - 1
             cell.hp -= 1
             switch (cell.type) {
                 case 'stem':
-                    // 养分充足且 CD 时间到，进行分裂，分裂后，两细胞相切
+                    // 养分充足且 CD 时间到，进行分裂
                     if (cell.life % 1000 === 0) {
-                        const bornRadius = typeProperties('cancer').radius;
                         return Cells.create({
-                            x: cell.x + cell.r + bornRadius,
-                            y: cell.y + cell.r + bornRadius,
+                            x: cell.x,
+                            y: cell.y,
                             r: typeProperties('cancer').radius,
                         }, 'cancer');
                     }
+                    cell.sonCnt += 1
                     return null;
                 case 'cancer':
                     // CD 时间到，进行分化
@@ -197,8 +217,8 @@ export const Cells = {
                     return null;
                 case 'alveolar':
                     // 视线内没有细胞，恢复 HP
-                    if (cell.view.length === 0 && cell.hp < typeProperties(cell.type).hp) {
-                        cell.hp += 100;
+                    if (cell.surround.length === 0 && cell.hp < typeProperties(cell.type).hp - HEAL_CNT) {
+                        cell.hp += HEAL_CNT;
                     }
                     return null;
                 default:

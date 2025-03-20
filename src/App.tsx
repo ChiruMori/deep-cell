@@ -7,6 +7,7 @@ import { useState } from 'react';
 function App() {
   const [cells, setCells] = useState<ICell[]>([]);
   const [selectedCell, setSelectedCell] = useState<ICell | undefined>(undefined)
+  const [currentRound, setCurrentRound] = useState(1)
   const [cnt, setCnt] = useState<CellTypeCounter>({
     stem: 0,
     cancer: 0,
@@ -26,9 +27,9 @@ function App() {
         backgroundColor: '#001',
         color: 'white'
       }}>
-        <LeftSide cells={cells} cnt={cnt} />
+        <LeftSide cells={cells} cnt={cnt} currentRound={currentRound} />
         <Application width={800} height={600}>
-          <MainStage setCnt={setCnt} setCells={setCells} cells={cells} setSelectedCell={setSelectedCell} />
+          <MainStage setCnt={setCnt} setCells={setCells} cells={cells} setSelectedCell={setSelectedCell} setCurrentRound={setCurrentRound} />
         </Application>
         <RightSide selectedCell={selectedCell} />
       </div>
