@@ -2,6 +2,7 @@ from pydantic import BaseModel, Field
 from typing import List
 
 class TrainingInput(BaseModel):
+    c_type: int
     life: float
     hp: float
     surround: List[int] = Field(min_length=6, max_length=6)
@@ -10,6 +11,7 @@ class TrainingInput(BaseModel):
 class TrainingOutput(BaseModel):
     direction: float = Field(..., ge=0, le=6.28319)  # 0-2π范围
     strength: float = Field(..., ge=0, le=1)
+    kw: float = Field(..., ge=0, le=1)  # 预留的通用字段，在部分细胞类型中使用
     id: str
 
 class DecisionResult(BaseModel):

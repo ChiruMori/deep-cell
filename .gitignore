@@ -25,3 +25,8 @@ dist-ssr
 
 # python
 __pycache__
+
+# 训练日志
+training_logs
+# 训练模型
+models

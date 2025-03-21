@@ -1,42 +1,43 @@
 /// <reference path="cell.d.ts" />
 
+// const LOG_CELL_ACTION = false;
 const SPEED_DECAY = 0.95;
-const HEAL_CNT = 100;
+const HEAL_CNT = 10;
 const cellTypesConfig: Record<CellType, CellTypeProperties> = {
     'stem': {
         maxAcc: 0.1,
         maxSpeed: 0.5,
         color: '#FFFF0088',
         radius: 3,
-        life: 1800,
-        hp: 1000
+        life: 180,
+        hp: 100
     },
     'cancer': {
         maxAcc: 0.5,
         maxSpeed: 1,
         color: '#88008888',
         radius: 5,
-        life: 120,
-        hp: 1000
+        life: 50,
+        hp: 100
     },
     'erythrocyte': {
         maxAcc: 2,
         maxSpeed: 2,
         color: '#FF000088',
         radius: 8,
-        life: 5000,
-        hp: 10000
+        life: 500,
+        hp: 300
     },
     'alveolar': {
         maxAcc: 0.05,
         maxSpeed: 0.1,
         color: '#00FF0088',
         radius: 5,
-        life: 2000,
-        hp: 10000
+        life: 200,
+        hp: 500
     },
 };
-const typeAsNumber = (type: CellType | null): number => {
+export const typeAsNumber = (type: CellType | null): number => {
     switch (type) {
         case 'stem':
             return 1;
@@ -47,10 +48,15 @@ const typeAsNumber = (type: CellType | null): number => {
         case 'alveolar':
             return 4;
         default:
+            console.error('Error type', type)
             return 0;
     }
 }
 const typeProperties = (type: CellType): CellTypeProperties => cellTypesConfig[type];
+const changeAcc = (cell: ICell, rate: number, angle: number): void => {
+    cell.xAcc = rate * typeProperties(cell.type).maxAcc * Math.cos(angle)
+    cell.yAcc = rate * typeProperties(cell.type).maxAcc * Math.sin(angle)
+}
 export const Cells = {
     checkHit: (cell: ICell, x: number, y: number): boolean => {
         const dx = cell.x - x;
@@ -67,10 +73,13 @@ export const Cells = {
         life: typeProperties(type).life * Math.random() * 1.1,
         hp: typeProperties(type).hp * Math.random() * 1.1,
         surround: [-1, -1, -1, -1, -1, -1],
+        bornSurround: [-1, -1, -1, -1, -1, -1],
         id: Math.random().toString(36).substring(2, 15),
         sonCnt: 0,
         lifeTime: 0,
         feed: 0,
+        ml: null,
+        mlForView: null,
     }),
 
     move: (cell: ICell): void => {
@@ -112,10 +121,7 @@ export const Cells = {
         }
     },
 
-    changeAcc: (cell: ICell, rate: number, angle: number): void => {
-        cell.xAcc = rate * typeProperties(cell.type).maxAcc * Math.cos(angle)
-        cell.yAcc = rate * typeProperties(cell.type).maxAcc * Math.sin(angle)
-    },
+    changeAcc,
 
     collide: (cell: ICell, cells: ICell[]): void => {
         const nearbyCells = [] as ICell[]
@@ -133,7 +139,8 @@ export const Cells = {
             if ((cell.type === 'erythrocyte' || cell.type === 'alveolar')
                 && (cell.hp > typeProperties(other.type).hp)
                 && (cell.type !== other.type)) {
-                const feed = typeProperties(other.type).hp - other.hp
+                let feed = typeProperties(other.type).hp - other.hp
+                feed = Math.min(feed, HEAL_CNT)
                 other.hp += feed
                 cell.feed = feed
             }
@@ -188,9 +195,15 @@ export const Cells = {
 
     actions: {
         step: (cell: ICell): ICell | null => {
+            if (!cell.ml) {
+                return null;
+            }
             cell.lifeTime += 1
             cell.life = cell.life - 1
             cell.hp -= 1
+            cell.mlForView = cell.ml
+            cell.ml = null
+            changeAcc(cell, cell.mlForView.strength, cell.mlForView.direction)
             switch (cell.type) {
                 case 'stem':
                     // 养分充足且 CD 时间到，进行分裂
@@ -206,19 +219,28 @@ export const Cells = {
                 case 'cancer':
                     // CD 时间到，进行分化
                     if (cell.life <= 0) {
-                        // TODO: 由机器学习输出：分化类型
-                        cell.type = ['stem', 'erythrocyte', 'alveolar'][Math.floor(Math.random() * 3)] as CellType;
-                        cell.life = typeProperties(cell.type).life;
-                        cell.hp = typeProperties(cell.type).hp;
-                        cell.r = typeProperties(cell.type).radius;
+                        const types = ['stem', 'erythrocyte', 'alveolar']
+                        const indexByKw = Math.floor(cell.mlForView.kw * types.length)
+                        // 如果 kw 为 0，则不进行分化，直接死亡
+                        if (cell.mlForView.kw !== 0) {
+                            cell.type = types[indexByKw] as CellType;
+                            cell.life = typeProperties(cell.type).life;
+                            cell.hp = typeProperties(cell.type).hp;
+                            cell.r = typeProperties(cell.type).radius;
+                            cell.bornSurround = [...cell.surround]
+                        }
                     }
                     return null;
                 case 'erythrocyte':
                     return null;
                 case 'alveolar':
                     // 视线内没有细胞，恢复 HP
-                    if (cell.surround.length === 0 && cell.hp < typeProperties(cell.type).hp - HEAL_CNT) {
+                    const alone = cell.surround.filter(s => s <= 0).length === 6
+                    if (alone) {
                         cell.hp += HEAL_CNT;
+                        if (cell.hp > typeProperties(cell.type).hp) {
+                            cell.hp = typeProperties(cell.type).hp;
+                        }
                     }
                     return null;
                 default:

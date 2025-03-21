@@ -13,16 +13,29 @@ declare interface IMovable {
     yAcc: number;
 }
 
+declare interface ImData {
+    // 方向
+    direction: number;
+    // 力量
+    strength: number;
+    // 保留字段
+    kw: number;
+}
+
 // 细胞接口
 declare interface ICell extends ICircle, IMovable {
     type: CellType;
     life: number;
     hp: number;
     surround: number[];
+    bornSurround: number[];
     id: string;
     sonCnt: number;
     lifeTime: number;
     feed: number;
+    // 机器学习返回的参数，细胞根据这个参数来行动，如果没有参数，则本轮跳过该细胞
+    ml: ImData | null;
+    mlForView: ImData | null;
 }
 
 // 细胞类型

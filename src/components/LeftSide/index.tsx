@@ -16,7 +16,7 @@ export default function LeftSide({ cells, cnt, currentRound }: Props): JSX.Eleme
   useEffect(() => {
     setRoundSecond(0)
     const interval = setInterval(() => {
-      setRoundSecond(roundSecond + 1)
+      setRoundSecond(prevSecond => prevSecond + 1)
     }, 1000)
     return () => clearInterval(interval)
   }, [currentRound])
@@ -25,13 +25,13 @@ export default function LeftSide({ cells, cnt, currentRound }: Props): JSX.Eleme
     if (roundSecond > maxRoundSecond) {
       setMaxRoundSecond(roundSecond)
     }
-  }, [roundSecond])
+  }, [roundSecond, maxRoundSecond])
 
   useEffect(() => {
     if (cells.length > maxCellCnt) {
       setMaxCellCnt(cells.length)
     }
-  }, [cells])
+  }, [cells, maxCellCnt])
 
   return (
     <div style={{

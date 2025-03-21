@@ -34,6 +34,13 @@ export default function RightSide({ selectedCell }: Props): JSX.Element {
                         <div>{selectedCell.hp > 0 ? selectedCell.hp : '凋亡'}</div>
                         <div>当前速度：</div>
                         <div>{Math.hypot(selectedCell.xSpeed, selectedCell.ySpeed).toFixed(1)}px/frame</div>
+                        <hr />
+                        <div>周围细胞：</div>
+                        <div>{selectedCell.surround.join(', ')}</div>
+                        <div>行动决策：</div>
+                        <div>方向：{(selectedCell.mlForView?.direction ?? -1) * 180 / Math.PI}°</div>
+                        <div>强度：{(selectedCell.mlForView?.strength ?? -1) * 100}%</div>
+                        <div>预留参数：{selectedCell.mlForView?.kw ?? -1}</div>
                     </div>
                 )}
             </div>
