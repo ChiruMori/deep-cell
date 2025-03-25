@@ -1,5 +1,6 @@
 import { JSX } from "react";
 import { Cells } from "../../models/cell";
+import Bar from "../Bar";
 interface Props {
     selectedCell?: ICell;
 }
@@ -29,18 +30,49 @@ export default function RightSide({ selectedCell }: Props): JSX.Element {
                         <div>半径：</div>
                         <div>{selectedCell.r}px</div>
                         <div>剩余生命：</div>
-                        <div>{selectedCell.life > 0 ? selectedCell.life : '衰亡'}</div>
+                        <Bar value={selectedCell.life}
+                            maxValue={Cells.typeProperties(selectedCell.type).life}
+                            color='#EF4444'
+                            bgColor="#374151"
+                            deadText="衰亡"
+                        />
                         <div>养分值：</div>
-                        <div>{selectedCell.hp > 0 ? selectedCell.hp : '凋亡'}</div>
+                        <Bar value={selectedCell.hp}
+                            maxValue={Cells.typeProperties(selectedCell.type).hp}
+                            color='#00AAFF'
+                            bgColor="#374151"
+                            deadText="凋亡"
+                        />
                         <div>当前速度：</div>
                         <div>{Math.hypot(selectedCell.xSpeed, selectedCell.ySpeed).toFixed(1)}px/frame</div>
                         <hr />
                         <div>周围细胞：</div>
                         <div>{selectedCell.surround.join(', ')}</div>
                         <div>行动决策：</div>
-                        <div>方向：{(selectedCell.mlForView?.direction ?? -1) * 180 / Math.PI}°</div>
-                        <div>强度：{(selectedCell.mlForView?.strength ?? -1) * 100}%</div>
-                        <div>预留参数：{selectedCell.mlForView?.kw ?? -1}</div>
+                        {/* 保留两位小数 */}
+                        <div>方向：{((selectedCell.mlForView?.direction ?? -1) * 180 / Math.PI).toFixed(2)}°</div>
+                        <div>强度：</div>
+                        <Bar value={selectedCell.mlForView?.strength ?? 0}
+                            maxValue={1}
+                            color='#AAFF00'
+                            bgColor="#374151"
+                            deadText="0"
+                        />
+                        <div>行为参数：</div>
+                        <Bar value={selectedCell.mlForView?.kw ?? 0}
+                            maxValue={1}
+                            color='#00E7FF'
+                            bgColor="#374151"
+                            deadText="0"
+                        />
+                        <hr />
+                        <div>当前奖励：</div>
+                        <Bar value={selectedCell.mlForView?.kw ?? 0}
+                            maxValue={1}
+                            color='#84CC16'
+                            bgColor="#374151"
+                            deadText="无效"
+                        />
                     </div>
                 )}
             </div>

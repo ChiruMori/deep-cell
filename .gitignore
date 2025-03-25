@@ -30,3 +30,4 @@ __pycache__
 training_logs
 # 训练模型
 models
+saved_models

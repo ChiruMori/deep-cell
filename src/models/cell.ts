@@ -3,38 +3,44 @@
 // const LOG_CELL_ACTION = false;
 const SPEED_DECAY = 0.95;
 const HEAL_CNT = 10;
+// 细胞分裂的养分消耗
+const SPLIT_NEED = 500;
+// 每个干细胞，指定帧内只能分裂一次
+const SPLIT_COOLDOWN = 100;
+// 细胞视线距离
+const VISION_DISTANCE = 30;
 const cellTypesConfig: Record<CellType, CellTypeProperties> = {
     'stem': {
         maxAcc: 0.1,
         maxSpeed: 0.5,
         color: '#FFFF0088',
         radius: 3,
-        life: 180,
-        hp: 100
+        life: 1800,
+        hp: 1000
     },
     'cancer': {
         maxAcc: 0.5,
         maxSpeed: 1,
         color: '#88008888',
         radius: 5,
-        life: 50,
-        hp: 100
+        life: 100,
+        hp: 500
     },
     'erythrocyte': {
         maxAcc: 2,
         maxSpeed: 2,
         color: '#FF000088',
         radius: 8,
-        life: 500,
-        hp: 300
+        life: 2000,
+        hp: 3000
     },
     'alveolar': {
         maxAcc: 0.05,
         maxSpeed: 0.1,
         color: '#00FF0088',
         radius: 5,
-        life: 200,
-        hp: 500
+        life: 2500,
+        hp: 5000
     },
 };
 export const typeAsNumber = (type: CellType | null): number => {
@@ -80,6 +86,7 @@ export const Cells = {
         feed: 0,
         ml: null,
         mlForView: null,
+        behaviorCd: 0,
     }),
 
     move: (cell: ICell): void => {
@@ -124,73 +131,78 @@ export const Cells = {
     changeAcc,
 
     collide: (cell: ICell, cells: ICell[]): void => {
+        if (!cell.ml) {
+            return;
+        }
         const nearbyCells = [] as ICell[]
+        cell.feed = 0
         cells.forEach((other) => {
             if (other === cell) {
                 return
             }
-            // x、y 距离快筛，超过双方直径的，直接跳过
-            const dd = (cell.r + other.r) * 2
-            if (Math.abs(cell.x - other.x) > dd || Math.abs(cell.y - other.y) > dd) {
+            // x、y 距离快筛，距离超过视线距离的，直接跳过
+            if (Math.abs(cell.x - other.x) > VISION_DISTANCE + other.r || Math.abs(cell.y - other.y) > VISION_DISTANCE + other.r) {
                 return
-            }
-            // 红细胞、肺泡会将自身 hp 分给除与自己不同类型的细胞
-            cell.feed = 0
-            if ((cell.type === 'erythrocyte' || cell.type === 'alveolar')
-                && (cell.hp > typeProperties(other.type).hp)
-                && (cell.type !== other.type)) {
-                let feed = typeProperties(other.type).hp - other.hp
-                feed = Math.min(feed, HEAL_CNT)
-                other.hp += feed
-                cell.feed = feed
             }
             nearbyCells.push(other)
             const distance = Math.sqrt(Math.pow(cell.x - other.x, 2) + Math.pow(cell.y - other.y, 2))
-            if (distance < dd / 2) {
+            // 发生碰撞的情况
+            const dd = cell.r + other.r
+            if (distance < dd) {
                 const angle = Math.atan2(other.y - cell.y, other.x - cell.x)
-                const force = (distance - dd / 2) / cell.r / cell.r / 2
+                const force = ((distance - dd) >> 3) / cell.r / cell.r / 2
                 // 追加在速度上
                 cell.xSpeed += force * Math.cos(angle)
                 cell.ySpeed += force * Math.sin(angle)
+                // 红细胞、肺泡会将自身 hp 分给除与自己不同类型的细胞
+                if ((cell.type === 'erythrocyte' || cell.type === 'alveolar')
+                    && (cell.hp > other.hp)
+                    && (cell.type !== other.type)) {
+                    let feed = typeProperties(other.type).hp - other.hp
+                    feed = Math.max(feed, 0)
+                    feed += Math.min(feed, HEAL_CNT)
+                    other.hp += feed
+                    cell.hp -= feed
+                    cell.feed = feed
+                }
             }
         })
-        // 每个细胞有 6 个视线，以细胞中心向 6 个方向发射射线，每个射线夹角60°
-        // 射线接触到的细胞为该视线的目标细胞（不要求严格第一个细胞）
-        cell.surround = []
-        for (let i = 0; i < 6; i++) {
-            const angle = i * Math.PI / 3
-            const x = cell.x + Math.cos(angle) * cell.r
-            const y = cell.y + Math.sin(angle) * cell.r
-            let minDistance = Infinity
-            let targetCell = null as ICell | null
-            nearbyCells.forEach((other) => {
-                if (other === cell) {
-                    return
-                }
-                // 计算射线与目标细胞的交点
-                const dx = other.x - x
-                const dy = other.y - y
-                const d = Math.sqrt(dx * dx + dy * dy)
-                const r1 = cell.r
-                const r2 = other.r
-                if (d > r1 + r2) {
-                    return
-                }
-                const a = (r1 * r1 - r2 * r2 + d * d) / (2 * d)
-                const h = Math.sqrt(r1 * r1 - a * a)
-                const x2 = x + a * dx / d
-                const y2 = y + a * dy / d
-                const x3 = x2 + h * dy / d
-                const y3 = y2 - h * dx / d
-                // 计算交点到射线起点的距离
-                const distance = Math.sqrt(Math.pow(x3 - x, 2) + Math.pow(y3 - y, 2))
-                if (distance < minDistance) {
-                    minDistance = distance
-                    targetCell = other
-                }
-            })
-            cell.surround.push(targetCell ? typeAsNumber(targetCell.type) : 0)
-        }
+        // 6 个扇形区域
+        cell.surround = [0, 0, 0, 0, 0, 0]
+        const minDistances = [Infinity, Infinity, Infinity, Infinity, Infinity, Infinity]
+
+        nearbyCells.forEach((other) => {
+            if (other === cell) {
+                return
+            }
+
+            // 计算当前细胞到目标细胞的角度和距离
+            const dx = other.x - cell.x
+            const dy = other.y - cell.y
+            const distance = Math.sqrt(dx * dx + dy * dy)
+
+            // 如果距离超过视线距离，直接跳过
+            if (distance > VISION_DISTANCE + other.r) {
+                return
+            }
+
+            // 计算当前细胞到目标细胞的角度（范围为 -PI 到 PI）
+            let cellToOtherAngle = Math.atan2(dy, dx)
+            
+            // 将角度转换为 0 到 2PI 的范围
+            if (cellToOtherAngle < 0) {
+                cellToOtherAngle += 2 * Math.PI
+            }
+            
+            // 计算当前细胞所属的扇形索引（将 0-2PI 分成6个扇形）
+            const sectorIndex = Math.floor((cellToOtherAngle / (2 * Math.PI)) * 6)
+            
+            // 如果当前距离小于之前记录的最小距离，则更新最小距离和扇形索引
+            if (distance < minDistances[sectorIndex]) {
+                minDistances[sectorIndex] = distance
+                cell.surround[sectorIndex] = typeAsNumber(other.type)
+            }
+        })
     },
 
     actions: {
@@ -198,23 +210,28 @@ export const Cells = {
             if (!cell.ml) {
                 return null;
             }
-            cell.lifeTime += 1
+            cell.lifeTime++
             cell.life = cell.life - 1
             cell.hp -= 1
             cell.mlForView = cell.ml
             cell.ml = null
+            if (cell.behaviorCd > 0) {
+                cell.behaviorCd -= 1
+            }
             changeAcc(cell, cell.mlForView.strength, cell.mlForView.direction)
             switch (cell.type) {
                 case 'stem':
-                    // 养分充足且 CD 时间到，进行分裂
-                    if (cell.life % 1000 === 0) {
+                    // 养分充足且行为参数大于0.9，进行分裂
+                    if (cell.hp > SPLIT_NEED && cell.mlForView.kw > 0.9 && cell.behaviorCd <= 0) {
+                        cell.hp -= SPLIT_NEED;
+                        cell.behaviorCd = SPLIT_COOLDOWN
+                        cell.sonCnt += 1
                         return Cells.create({
                             x: cell.x,
                             y: cell.y,
                             r: typeProperties('cancer').radius,
                         }, 'cancer');
                     }
-                    cell.sonCnt += 1
                     return null;
                 case 'cancer':
                     // CD 时间到，进行分化
@@ -225,7 +242,8 @@ export const Cells = {
                         if (cell.mlForView.kw !== 0) {
                             cell.type = types[indexByKw] as CellType;
                             cell.life = typeProperties(cell.type).life;
-                            cell.hp = typeProperties(cell.type).hp;
+                            // HP 需要继承 cancer 的，否则分化成高 hp 细胞将过于有利
+                            // cell.hp = typeProperties(cell.type).hp;
                             cell.r = typeProperties(cell.type).radius;
                             cell.bornSurround = [...cell.surround]
                         }
@@ -250,4 +268,6 @@ export const Cells = {
     },
 
     typeProperties,
+    VISION_DISTANCE,
+    SPLIT_NEED,
 };

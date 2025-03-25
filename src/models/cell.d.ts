@@ -22,6 +22,13 @@ declare interface ImData {
     kw: number;
 }
 
+declare interface ImDataForView {
+    direction: number;
+    strength: number;
+    kw: number;
+    reward?: number;
+}
+
 // 细胞接口
 declare interface ICell extends ICircle, IMovable {
     type: CellType;
@@ -35,7 +42,8 @@ declare interface ICell extends ICircle, IMovable {
     feed: number;
     // 机器学习返回的参数，细胞根据这个参数来行动，如果没有参数，则本轮跳过该细胞
     ml: ImData | null;
-    mlForView: ImData | null;
+    mlForView: ImDataForView | null;
+    behaviorCd: number;
 }
 
 // 细胞类型

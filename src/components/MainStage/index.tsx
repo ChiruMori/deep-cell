@@ -43,12 +43,14 @@ interface RealtimeFeedback {
     is_terminal: boolean;
 }
 
-const MainStage = ({ setCnt, setCells, cells, setSelectedCell, setCurrentRound }: {
+const MainStage = ({ setCnt, setCells, cells, setSelectedCell, setCurrentRound, setPause, userPaused }: {
     cells: ICell[],
     setCells: (value: SetStateAction<ICell[]>) => void,
     setCnt: (value: SetStateAction<CellTypeCounter>) => void,
     setCurrentRound: (value: SetStateAction<number>) => void,
-    setSelectedCell: (value: SetStateAction<ICell | undefined>) => void
+    setSelectedCell: (value: SetStateAction<ICell | undefined>) => void,
+    setPause: (value: SetStateAction<boolean>) => void,
+    userPaused: boolean,
 }) => {
     const [active, setActive] = useState('')
     // 使用ref存储WebSocket实例
@@ -85,15 +87,26 @@ const MainStage = ({ setCnt, setCells, cells, setSelectedCell, setCurrentRound }
         graphics.stroke()
         // 绘制细胞
         cells.forEach((cell) => {
+            if (cell.id === active) {
+                // 选中的细胞，绘制视野区域
+                graphics.setStrokeStyle({ color: 'white', width: 1 })
+                graphics.circle(cell.x, cell.y, Cells.VISION_DISTANCE)
+                graphics.fillStyle = Cells.typeProperties(cell.type).color.substring(0, 7) + '33';
+                graphics.fill()
+                // 为选中的细胞绘制六个方向的射线（圆心到 VISION_DISTANCE）
+                for (let i = 0; i < 6; i++) {
+                    const angle = (Math.PI / 3) * i;
+                    const x = cell.x + Cells.VISION_DISTANCE * Math.cos(angle);
+                    const y = cell.y + Cells.VISION_DISTANCE * Math.sin(angle);
+                    graphics.moveTo(cell.x, cell.y);
+                    graphics.lineTo(x, y);
+                }
+                graphics.stroke()
+            }
+            // 细胞本身（一个大圆点）
             graphics.setFillStyle({ color: Cells.typeProperties(cell.type).color })
             graphics.circle(cell.x, cell.y, cell.r)
             graphics.fill()
-            // 选中的细胞，绘制border
-            if (cell.id === active) {
-                graphics.setStrokeStyle({ color: 'white', width: 2 })
-                graphics.circle(cell.x, cell.y, cell.r)
-                graphics.stroke()
-            }
         })
     }, [cells])
 
@@ -107,39 +120,43 @@ const MainStage = ({ setCnt, setCells, cells, setSelectedCell, setCurrentRound }
     // 创建和管理WebSocket连接
     const createWebSocketConnections = useCallback(() => {
         if (wsStatus === 'connecting') return;
-        
+
         // 关闭现有连接
         if (tickWsRef.current && tickWsRef.current.readyState !== WebSocket.CLOSED) {
             tickWsRef.current.close();
         }
-        
+
         if (feedbackWsRef.current && feedbackWsRef.current.readyState !== WebSocket.CLOSED) {
             feedbackWsRef.current.close();
         }
-        
+
         setWsStatus('connecting');
+        setPause(true);
+
+        // 创建新的WebSocket连接
         LOG_SOCKET_LIFECYCLE && console.log("创建新的WebSocket连接...");
-        
+
         // 创建tick WebSocket
         const tickWs = new WebSocket('ws://localhost:8000/training/tick');
         tickWsRef.current = tickWs;
-        
+
         // 创建feedback WebSocket
         const feedbackWs = new WebSocket('ws://localhost:8000/training/apoptosis');
         feedbackWsRef.current = feedbackWs;
-        
+
         // 设置事件处理器
         tickWs.onopen = () => {
             LOG_SOCKET_LIFECYCLE && console.log("Tick WebSocket连接成功");
             setWsStatus('connected');
-            pendingTickRequestRef.current = false; // 初始化为非等待状态
+            pendingTickRequestRef.current = false;
+            setPause(feedbackWsRef.current?.readyState !== WebSocket.OPEN);
         };
-        
+
         tickWs.onmessage = (event) => {
             try {
                 const responses = JSON.parse(event.data);
                 LOG_DATA_SAMPLE && console.log('收到tick响应，Sample: ', responses[0])
-                
+
                 // 对保存的细胞引用应用更新
                 if (cellsToUpdateRef.current.length > 0) {
                     for (const cell of cellsToUpdateRef.current) {
@@ -153,15 +170,15 @@ const MainStage = ({ setCnt, setCells, cells, setSelectedCell, setCurrentRound }
                             cell.ml = ml;
                         }
                     }
-                    
+
                     // 清空临时细胞引用
                     cellsToUpdateRef.current = [];
                 }
-                
+
                 // 更新请求状态
                 pendingTickRequestRef.current = false;
                 lastTickResponseTimeRef.current = Date.now();
-                
+
                 // 如果有超时检测，清除它
                 if (tickTimeoutRef.current !== null) {
                     window.clearTimeout(tickTimeoutRef.current);
@@ -169,48 +186,49 @@ const MainStage = ({ setCnt, setCells, cells, setSelectedCell, setCurrentRound }
                 }
             } catch (error) {
                 console.error("处理WebSocket响应时出错:", error);
-                pendingTickRequestRef.current = false; // 出错也重置状态
+                pendingTickRequestRef.current = false;
             }
         };
-        
+
         tickWs.onerror = (error) => {
             console.error("Tick WebSocket错误:", error);
             setWsStatus('disconnected');
             scheduleReconnect();
         };
-        
+
         tickWs.onclose = () => {
             LOG_SOCKET_LIFECYCLE && console.log("Tick WebSocket连接关闭");
             setWsStatus('disconnected');
             scheduleReconnect();
         };
-        
+
         feedbackWs.onopen = () => {
             LOG_SOCKET_LIFECYCLE && console.log("Feedback WebSocket连接成功");
+            setPause(tickWsRef.current?.readyState !== WebSocket.OPEN);
         };
-        
+
         feedbackWs.onerror = (error) => {
             console.error("Feedback WebSocket错误:", error);
         };
-        
+
         feedbackWs.onclose = () => {
             LOG_SOCKET_LIFECYCLE && console.log("Feedback WebSocket连接关闭");
         };
     }, [wsStatus]);
-    
+
     // 计划重新连接
     const scheduleReconnect = useCallback(() => {
         if (wsReconnectTimerRef.current) {
             window.clearTimeout(wsReconnectTimerRef.current);
         }
-        
+
         wsReconnectTimerRef.current = window.setTimeout(() => {
             LOG_SOCKET_LIFECYCLE && console.log("尝试重新连接WebSocket...");
             createWebSocketConnections();
             wsReconnectTimerRef.current = null;
         }, 2000); // 2秒后重试
     }, [createWebSocketConnections]);
-    
+
     // 组件挂载和卸载
     useEffect(() => {
         // 初始化细胞
@@ -218,20 +236,20 @@ const MainStage = ({ setCnt, setCells, cells, setSelectedCell, setCurrentRound }
             initCells();
             initializedRef.current = true;
         }
-        
+
         // 创建WebSocket连接
         createWebSocketConnections();
-        
+
         // 清理函数
         return () => {
             if (tickWsRef.current) {
                 tickWsRef.current.close();
             }
-            
+
             if (feedbackWsRef.current) {
                 feedbackWsRef.current.close();
             }
-            
+
             if (wsReconnectTimerRef.current) {
                 window.clearTimeout(wsReconnectTimerRef.current);
             }
@@ -239,19 +257,22 @@ const MainStage = ({ setCnt, setCells, cells, setSelectedCell, setCurrentRound }
     }, []);
 
     const generateCells = useCallback(() => {
-            const newCells = [] as ICell[]
-            for (let i = 0; i < CANCER_CNT; i++) {
-                newCells.push(Cells.create({
-                    x: Math.random() * 800,
-                    y: Math.random() * 600,
-                    r: Cells.typeProperties('cancer').radius
-                }, 'cancer'));
-            }
-            return newCells;
+        const newCells = [] as ICell[]
+        for (let i = 0; i < CANCER_CNT; i++) {
+            newCells.push(Cells.create({
+                x: Math.random() * 800,
+                y: Math.random() * 600,
+                r: Cells.typeProperties('cancer').radius
+            }, 'cancer'));
+        }
+        return newCells;
     }, [])
-    
+
     // 修改tickCallback使用同步等待模式
     const tickCallback = useCallback(() => {
+        if (userPaused) {
+            return;
+        }
         // 如果前一个请求还在等待响应，跳过这一帧
         if (pendingTickRequestRef.current) {
             // 检查是否超时（超过3秒没有响应）
@@ -259,7 +280,7 @@ const MainStage = ({ setCnt, setCells, cells, setSelectedCell, setCurrentRound }
             if (now - lastTickResponseTimeRef.current > 3000) {
                 console.warn("WebSocket请求超时，重置状态");
                 pendingTickRequestRef.current = false;
-                
+
                 // 可选：重新连接
                 if (wsStatus === 'connected') {
                     LOG_SOCKET_LIFECYCLE && console.log("尝试重新建立连接...");
@@ -270,13 +291,13 @@ const MainStage = ({ setCnt, setCells, cells, setSelectedCell, setCurrentRound }
                 return;
             }
         }
-        
+
         setCells(currentCells => {
             // 检查是否需要重置
             if (currentCells.length === 0 && initializedRef.current) {
                 // 新一轮开始
                 setCurrentRound(r => r + 1);
-                
+
                 // 检查WebSocket连接
                 if (wsStatus !== 'connected') {
                     LOG_SOCKET_LIFECYCLE && console.log("WebSocket未连接，尝试重新连接...");
@@ -284,20 +305,20 @@ const MainStage = ({ setCnt, setCells, cells, setSelectedCell, setCurrentRound }
                     // 返回空数组，等下一帧处理
                     return currentCells;
                 }
-                
+
                 return generateCells();
             }
-            
+
             // 如果没有细胞或WebSocket未连接，不进行处理
             if (!currentCells || currentCells.length === 0) {
                 return currentCells;
             }
-            
+
             if (wsStatus !== 'connected') {
                 // WebSocket未连接，不处理，但保持显示
                 return currentCells;
             }
-            
+
             const bornCells = [] as ICell[];
             const newCnt = {
                 stem: 0,
@@ -310,6 +331,12 @@ const MainStage = ({ setCnt, setCells, cells, setSelectedCell, setCurrentRound }
             const realtimeFeedbacks: RealtimeFeedback[] = [];
 
             const newCells = currentCells.filter((cell) => {
+                if (!cell.ml) {
+                    return true;
+                }
+                if (cell.hp < 0 || cell.life < 0) {
+                    throw new Error('细胞状态异常，状态已过期');
+                }
                 // 记录动作前的状态
                 const prevHp = cell.hp;
                 const prevSonCnt = cell.sonCnt || 0;
@@ -330,24 +357,30 @@ const MainStage = ({ setCnt, setCells, cells, setSelectedCell, setCurrentRound }
                 // 计算即时奖励
                 const hpChange = cell.hp - prevHp;
                 const newSonCnt = cell.sonCnt || 0;
-                const sonChange = newSonCnt - prevSonCnt;
+                // 繁殖奖励，需要抵消HP消耗
+                const sonChange = (newSonCnt - prevSonCnt) * Cells.SPLIT_NEED * 0.1;
 
                 // 训练核心：奖励函数
                 // 计算即时奖励：HP变化 + 繁殖奖励 + 存活奖励
                 const immediateReward =
-                    // HP变化，归一化并赋予40%权重，细胞为其他细胞提供养分，也给予奖励
-                    (hpChange + cell.feed) * 0.4 +
+                    // HP变化，细胞为其他细胞提供养分，会获得更高奖励
+                    (hpChange * 0.1 + cell.feed * 0.2) * 0.4 +
                     // 成功繁殖（免疫细胞杀死负面细胞，杀死正常细胞时惩罚），40%权重
                     (sonChange > 0 ? 1 : 0) * 0.4 +
-                    // 存活给予20%的基础奖励，死于养分不足（非自然死亡）时，给予负奖励
-                    (alive ? 0.2 : (cell.hp <= 0 ? -1 : 0.05));
+                    // 存活的基础奖励，死于养分不足（非自然死亡）时，给予负奖励
+                    (alive ? 0.1 : (cell.hp <= 0 ? -1 : 0));
+                const onlyAliveReward = (hpChange == 0 || hpChange == -1) && sonChange == 0 && alive;
+                if (cell.mlForView) {
+                    cell.mlForView.reward = immediateReward;
+                }
                 const exp = {
                     id: cell.id,
                     state: {
                         life: cell.life,
                         hp: cell.hp,
                         surround: cell.surround,
-                        c_type: typeAsNumber(cell.type)
+                        c_type: typeAsNumber(cell.type),
+                        speed: [cell.xSpeed, cell.ySpeed],
                     },
                     action: {
                         angle: cell.ml?.direction || 0,
@@ -357,8 +390,10 @@ const MainStage = ({ setCnt, setCells, cells, setSelectedCell, setCurrentRound }
                     immediate_reward: immediateReward,
                     is_terminal: !alive
                 }
-                // 收集实时反馈
-                realtimeFeedbacks.push(exp);
+                // 收集实时反馈，仅有存活奖励时，降低收集频率
+                if (!onlyAliveReward && Math.random() < 0.05) {
+                    realtimeFeedbacks.push(exp);
+                }
 
                 // 细胞挂了，补充一次反馈（用于训练 cancer 分化方向）
                 if (!alive) {
@@ -391,75 +426,75 @@ const MainStage = ({ setCnt, setCells, cells, setSelectedCell, setCurrentRound }
                 newCnt[cell.type] = (newCnt[cell.type] || 0) + (alive ? 1 : 0);
                 return alive;
             });
-            
+
             // 发送反馈数据 - 异步处理，不影响主循环
-            if (feedbackWsRef.current && 
-                feedbackWsRef.current.readyState === WebSocket.OPEN && 
+            if (feedbackWsRef.current &&
+                feedbackWsRef.current.readyState === WebSocket.OPEN &&
                 realtimeFeedbacks.length > 0) {
-                
+
                 try {
-                    feedbackWsRef.current.send(JSON.stringify({
-                        type: 'realtime',
-                        data: realtimeFeedbacks
-                    }));
+                    feedbackWsRef.current.send(JSON.stringify(realtimeFeedbacks));
                     LOG_DATA_SAMPLE && console.log('发送反馈数据，Sample: ', realtimeFeedbacks[0])
                 } catch (error) {
                     console.error('发送反馈数据时出错:', error);
                 }
             }
-            
+
             // 发送数据到服务器 - 同步等待模式
-            if (tickWsRef.current && 
-                tickWsRef.current.readyState === WebSocket.OPEN && 
-                newCells.length > 0 && 
+            if (tickWsRef.current &&
+                tickWsRef.current.readyState === WebSocket.OPEN &&
+                newCells.length > 0 &&
                 !tickWsRef.current.bufferedAmount) {
-                
+
                 try {
                     // 标记为等待响应状态
                     pendingTickRequestRef.current = true;
                     lastTickResponseTimeRef.current = Date.now();
-                    
+
                     // 保存当前细胞引用以便在响应中更新
                     cellsToUpdateRef.current = [...newCells];
-                    
+
                     const datas = newCells.map(cell => ({
                         c_type: typeAsNumber(cell.type),
                         life: cell.life,
                         hp: cell.hp,
                         surround: cell.surround || [0, 0, 0, 0, 0, 0],
+                        speed: [cell.xSpeed, cell.ySpeed],
                         id: cell.id
                     }));
-                    
+
                     LOG_DATA_SAMPLE && console.log('发送tick请求，Sample: ', datas[0])
-                    
+
                     // 设置超时检测
                     if (tickTimeoutRef.current !== null) {
                         window.clearTimeout(tickTimeoutRef.current);
                     }
-                    
+
                     tickTimeoutRef.current = window.setTimeout(() => {
                         LOG_SOCKET_LIFECYCLE && console.warn("WebSocket请求超时，重置状态");
                         pendingTickRequestRef.current = false;
                         tickTimeoutRef.current = null;
                     }, 3000); // 3秒超时
-                    
+
                     // 发送数据
                     tickWsRef.current.send(JSON.stringify(datas));
-                    
+
                 } catch (error) {
                     LOG_SOCKET_LIFECYCLE && console.error('发送WebSocket数据时出错:', error);
                     pendingTickRequestRef.current = false; // 出错时重置状态
                 }
+            } else if (tickWsRef.current?.bufferedAmount) {
+                LOG_SOCKET_LIFECYCLE && console.log('WebSocket缓冲区已满，等待下一次发送');
+                pendingTickRequestRef.current = true;
             }
-            
+
             // 更新计数器和细胞数组
             setCnt(newCnt);
-            
+
             // 合并出生的细胞
-            const finalCells = [...newCells, ...bornCells];
-            return finalCells;
+            return [...newCells, ...bornCells];
         });
-    }, [wsStatus, createWebSocketConnections]);
+    }, [wsStatus, createWebSocketConnections, userPaused]);
 
     const initCells = useCallback(() => {
         setCells(prevCells => {
@@ -519,13 +554,24 @@ const MainStage = ({ setCnt, setCells, cells, setSelectedCell, setCurrentRound }
                     />
                 )}
                 {pendingTickRequestRef.current && (
-                    <pixiText text="数据交互中..."
+                    <pixiText text="Training..."
                         x={800 / 2}
                         y={550}
                         anchor={0.5}
                         style={{
                             fontSize: 14,
                             fill: '#ffff00'
+                        }}
+                    />
+                )}
+                {userPaused && (
+                    <pixiText text="已暂停"
+                        x={800 / 2}
+                        y={600 / 2}
+                        anchor={0.5}
+                        style={{
+                            fontSize: 24,
+                            fill: '#ffffff'
                         }}
                     />
                 )}

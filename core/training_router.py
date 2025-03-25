@@ -1,8 +1,6 @@
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
-from .models.cell import TrainingInput
 from .nn_models.network import CellNetwork
 import torch
-import numpy as np
 from collections import deque
 import random
 import traceback
@@ -94,7 +92,8 @@ async def train_model(batch_size=16, epochs=5):
                     state['c_type'],
                     state['life'],
                     state['hp'],
-                    *state['surround']
+                    *state['surround'],
+                    state['speed']
                 ])
                 
                 actions.append([
@@ -207,7 +206,8 @@ async def handle_websocket(websocket: WebSocket):
                                 item.get('c_type', 0),
                                 item.get('life', 0),
                                 item.get('hp', 0),
-                                *surround
+                                *surround,
+                                item.get('speed', [0, 0])
                             ])
                         except Exception as item_e:
                             logger.log(f"处理请求项错误: {item_e}")
@@ -300,14 +300,11 @@ async def on_apoptosis(websocket: WebSocket):
                 
                 if not isinstance(message, dict) or 'type' not in message or 'data' not in message:
                     continue
-                
-                message_type = message['type']
-                data = message['data']
 
-                if message_type == 'realtime' and isinstance(data, list):
+                if isinstance(message, list):
                     # 处理反馈
                     feedback_count = 0
-                    for feedback in data:
+                    for feedback in message:
                         try:
                             # 简化验证逻辑
                             if 'state' not in feedback or 'action' not in feedback:
@@ -317,7 +314,7 @@ async def on_apoptosis(websocket: WebSocket):
                             action = feedback.get('action', {})
                             
                             # 确保所有必要字段都存在
-                            if not all(k in state for k in ['c_type', 'life', 'hp', 'surround']):
+                            if not all(k in state for k in ['c_type', 'life', 'hp', 'surround', 'speed']):
                                 continue
                                 
                             if not all(k in action for k in ['angle', 'strength']):
@@ -360,7 +357,3 @@ async def on_apoptosis(websocket: WebSocket):
     finally:
         manager.disconnect(client_id)
         logger.log(f"关闭反馈WebSocket连接: {client_id}")
-
-@router.websocket("/senescence")
-async def on_senescence(websocket: WebSocket):
-    pass
