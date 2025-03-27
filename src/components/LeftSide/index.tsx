@@ -4,30 +4,23 @@ interface Props {
   cells: ICell[]
   cnt: CellTypeCounter,
   currentRound: number,
-  pause: boolean,
   setUserPaused: (pause: SetStateAction<boolean>) => void,
   userPaused: boolean
 }
 
-export default function LeftSide({ cells, cnt, currentRound, pause, setUserPaused, userPaused }: Props): JSX.Element {
+export default function LeftSide({ cells, cnt, currentRound, setUserPaused, userPaused }: Props): JSX.Element {
 
   // 秒数计时（setInterval，当currentRound变化时，重新计时）
   const [roundSecond, setRoundSecond] = useState(0)
   const [maxRoundSecond, setMaxRoundSecond] = useState(0)
   const [maxCellCnt, setMaxCellCnt] = useState(0)
 
-  // 使用 ref 存储可变的暂停状态
-  const pauseRef = useRef(false);
-  useEffect(() => {
-    pauseRef.current = pause || userPaused;
-  }, [pause, userPaused]);
-
   useEffect(() => {
     let interval: number;
     
     // 只在轮次变化时重置计时
     const handler = () => {
-      if (!pauseRef.current) {
+      if (!userPaused) {
         setRoundSecond(prev => prev + 1);
       }
     };

@@ -11,6 +11,7 @@ const SPLIT_COOLDOWN = 100;
 const VISION_DISTANCE = 30;
 const cellTypesConfig: Record<CellType, CellTypeProperties> = {
     'stem': {
+        shortName: '干',
         maxAcc: 0.1,
         maxSpeed: 0.5,
         color: '#FFFF0088',
@@ -19,6 +20,7 @@ const cellTypesConfig: Record<CellType, CellTypeProperties> = {
         hp: 1000
     },
     'cancer': {
+        shortName: '癌',
         maxAcc: 0.5,
         maxSpeed: 1,
         color: '#88008888',
@@ -27,6 +29,7 @@ const cellTypesConfig: Record<CellType, CellTypeProperties> = {
         hp: 500
     },
     'erythrocyte': {
+        shortName: '红',
         maxAcc: 2,
         maxSpeed: 2,
         color: '#FF000088',
@@ -35,6 +38,7 @@ const cellTypesConfig: Record<CellType, CellTypeProperties> = {
         hp: 3000
     },
     'alveolar': {
+        shortName: '肺泡',
         maxAcc: 0.05,
         maxSpeed: 0.1,
         color: '#00FF0088',
@@ -58,6 +62,24 @@ export const typeAsNumber = (type: CellType | null): number => {
             return 0;
     }
 }
+// 红细胞、肺泡会将自身 hp 分给除与自己不同类型的细胞
+const feedHandle = (provider: ICell, consumer: ICell): void => {
+    if (provider.type !== 'erythrocyte' && provider.type !== 'alveolar') {
+        return
+    }
+    if (provider.type === consumer.type) {
+        return
+    }
+    const maxNeed = typeProperties(consumer.type).hp - consumer.hp;
+    const maxProvide = HEAL_CNT * (provider.ml?.kw ?? 0);
+    const feed = Math.max(Math.min(maxNeed, maxProvide, 0), 0);
+    if (provider.hp <= 0 || provider.hp < feed || provider.hp < consumer.hp) {
+        return
+    }
+    consumer.hp += feed
+    provider.hp -= feed
+    provider.feed += feed
+}
 const typeProperties = (type: CellType): CellTypeProperties => cellTypesConfig[type];
 const changeAcc = (cell: ICell, rate: number, angle: number): void => {
     cell.xAcc = rate * typeProperties(cell.type).maxAcc * Math.cos(angle)
@@ -76,8 +98,9 @@ export const Cells = {
         xAcc: 0,
         yAcc: 0,
         type,
-        life: typeProperties(type).life * Math.random() * 1.1,
-        hp: typeProperties(type).hp * Math.random() * 1.1,
+        // 调整到 0.3~1 的范围内
+        life: typeProperties(type).life * Math.random() * 0.7 + 0.3,
+        hp: typeProperties(type).hp * Math.random() * 0.7 + 0.3,
         surround: [-1, -1, -1, -1, -1, -1],
         bornSurround: [-1, -1, -1, -1, -1, -1],
         id: Math.random().toString(36).substring(2, 15),
@@ -86,7 +109,10 @@ export const Cells = {
         feed: 0,
         ml: null,
         mlForView: null,
-        behaviorCd: 0,
+        behaviorHelper: {
+            cd: 0,
+            reward: 0,
+        },
     }),
 
     move: (cell: ICell): void => {
@@ -154,19 +180,10 @@ export const Cells = {
                 // 追加在速度上
                 cell.xSpeed += force * Math.cos(angle)
                 cell.ySpeed += force * Math.sin(angle)
-                // 红细胞、肺泡会将自身 hp 分给除与自己不同类型的细胞
-                if ((cell.type === 'erythrocyte' || cell.type === 'alveolar')
-                    && (cell.hp > other.hp)
-                    && (cell.type !== other.type)) {
-                    let feed = typeProperties(other.type).hp - other.hp
-                    feed = Math.max(feed, 0)
-                    feed += Math.min(feed, HEAL_CNT)
-                    other.hp += feed
-                    cell.hp -= feed
-                    cell.feed = feed
-                }
+                feedHandle(cell, other);
             }
         })
+        const dead = cell.hp <= 0 || cell.life <= 0
         // 6 个扇形区域
         cell.surround = [0, 0, 0, 0, 0, 0]
         const minDistances = [Infinity, Infinity, Infinity, Infinity, Infinity, Infinity]
@@ -188,19 +205,23 @@ export const Cells = {
 
             // 计算当前细胞到目标细胞的角度（范围为 -PI 到 PI）
             let cellToOtherAngle = Math.atan2(dy, dx)
-            
+
             // 将角度转换为 0 到 2PI 的范围
             if (cellToOtherAngle < 0) {
                 cellToOtherAngle += 2 * Math.PI
             }
-            
+
             // 计算当前细胞所属的扇形索引（将 0-2PI 分成6个扇形）
             const sectorIndex = Math.floor((cellToOtherAngle / (2 * Math.PI)) * 6)
-            
+
             // 如果当前距离小于之前记录的最小距离，则更新最小距离和扇形索引
             if (distance < minDistances[sectorIndex]) {
                 minDistances[sectorIndex] = distance
                 cell.surround[sectorIndex] = typeAsNumber(other.type)
+                // 当前细胞死亡时，对周围细胞进行标记
+                if (dead) {
+                    other.behaviorHelper.reward -= 0.1;
+                }
             }
         })
     },
@@ -215,16 +236,16 @@ export const Cells = {
             cell.hp -= 1
             cell.mlForView = cell.ml
             cell.ml = null
-            if (cell.behaviorCd > 0) {
-                cell.behaviorCd -= 1
+            if (cell.behaviorHelper.cd > 0) {
+                cell.behaviorHelper.cd -= 1
             }
             changeAcc(cell, cell.mlForView.strength, cell.mlForView.direction)
             switch (cell.type) {
                 case 'stem':
                     // 养分充足且行为参数大于0.9，进行分裂
-                    if (cell.hp > SPLIT_NEED && cell.mlForView.kw > 0.9 && cell.behaviorCd <= 0) {
+                    if (cell.hp > SPLIT_NEED && cell.mlForView.kw > 0.9 && cell.behaviorHelper.cd <= 0) {
                         cell.hp -= SPLIT_NEED;
-                        cell.behaviorCd = SPLIT_COOLDOWN
+                        cell.behaviorHelper.cd = SPLIT_COOLDOWN
                         cell.sonCnt += 1
                         return Cells.create({
                             x: cell.x,
@@ -242,7 +263,7 @@ export const Cells = {
                         if (cell.mlForView.kw !== 0) {
                             cell.type = types[indexByKw] as CellType;
                             cell.life = typeProperties(cell.type).life;
-                            // HP 需要继承 cancer 的，否则分化成高 hp 细胞将过于有利
+                            // HP 需要继承的，否则分化成高 hp 细胞将过于有利
                             // cell.hp = typeProperties(cell.type).hp;
                             cell.r = typeProperties(cell.type).radius;
                             cell.bornSurround = [...cell.surround]
@@ -268,6 +289,26 @@ export const Cells = {
     },
 
     typeProperties,
+    typeAsText: (type: CellType | null): string => {
+        if (!type) {
+            return '-' 
+        }
+        return typeProperties(type).shortName
+    },
+    numberAsType: (num: number): CellType | null => {
+        switch (num) {
+            case 1:
+                return 'stem';
+            case 2:
+                return 'cancer';
+            case 3:
+                return 'erythrocyte';
+            case 4:
+                return 'alveolar';
+            default:
+                return null;
+        }
+    },
     VISION_DISTANCE,
     SPLIT_NEED,
 };

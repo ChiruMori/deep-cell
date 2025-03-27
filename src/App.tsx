@@ -8,7 +8,6 @@ function App() {
   const [cells, setCells] = useState<ICell[]>([]);
   const [selectedCell, setSelectedCell] = useState<ICell | undefined>(undefined)
   const [currentRound, setCurrentRound] = useState(1)
-  const [pause, setPause] = useState(true)
   const [userPaused, setUserPaused] = useState(false)
   const [cnt, setCnt] = useState<CellTypeCounter>({
     stem: 0,
@@ -29,9 +28,9 @@ function App() {
         backgroundColor: '#001',
         color: 'white'
       }}>
-        <LeftSide cells={cells} cnt={cnt} currentRound={currentRound} pause={pause} userPaused={userPaused} setUserPaused={setUserPaused} />
+        <LeftSide cells={cells} cnt={cnt} currentRound={currentRound} userPaused={userPaused} setUserPaused={setUserPaused} />
         <Application width={800} height={600}>
-          <MainStage setCnt={setCnt} setCells={setCells} cells={cells} setSelectedCell={setSelectedCell} setCurrentRound={setCurrentRound} setPause={setPause} userPaused={userPaused} />
+          <MainStage setCnt={setCnt} setCells={setCells} cells={cells} setSelectedCell={setSelectedCell} setCurrentRound={setCurrentRound} userPaused={userPaused} />
         </Application>
         <RightSide selectedCell={selectedCell} />
       </div>

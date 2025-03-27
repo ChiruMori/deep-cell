@@ -29,6 +29,13 @@ declare interface ImDataForView {
     reward?: number;
 }
 
+declare interface CellBehaviorProps {
+    // 通用的行为 CD
+    cd: number;
+    // 额外奖励
+    reward: number;
+}
+
 // 细胞接口
 declare interface ICell extends ICircle, IMovable {
     type: CellType;
@@ -43,7 +50,7 @@ declare interface ICell extends ICircle, IMovable {
     // 机器学习返回的参数，细胞根据这个参数来行动，如果没有参数，则本轮跳过该细胞
     ml: ImData | null;
     mlForView: ImDataForView | null;
-    behaviorCd: number;
+    behaviorHelper: CellBehaviorProps;
 }
 
 // 细胞类型
@@ -52,6 +59,7 @@ declare type CellTypeCounter = {
     [key in CellType]?: number;
 }
 declare interface CellTypeProperties {
+    shortName: string;
     color: string;
     maxAcc: number;
     maxSpeed: number;
