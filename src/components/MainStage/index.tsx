@@ -51,12 +51,11 @@ const MainStage = ({ setCnt, setCells, cells, setSelectedCell, setCurrentRound, 
                 for (const cell of cellsToUpdateRef.current) {
                     const res = ws.lastTickMsg.find((r: any) => r.id === cell.id);
                     if (res) {
-                        const ml = {
+                        cell.ml = {
                             direction: res.angle,
                             strength: res.strength,
                             kw: res.kw
                         }
-                        cell.ml = ml;
                     }
                 }
 
@@ -73,12 +72,18 @@ const MainStage = ({ setCnt, setCells, cells, setSelectedCell, setCurrentRound, 
             return;
         }
 
+
         setCells(prevCells => {
+            prevCells.forEach(cell => {
+                if (!cell.type) {
+                    throw new Error('Cell type is undefined');
+                }
+            });
             const tickRes = updateCells(prevCells);
             setCnt(tickRes.cnt);
             setCurrentRound(rnd => tickRes.newRound ? rnd + 1 : rnd);
             // 反馈数据
-            if (tickRes.feedbacksForTraining) {
+            if (tickRes.feedbacksForTraining && tickRes.feedbacksForTraining.length > 0) {
                 ws.sendFbMessage(tickRes.feedbacksForTraining);
                 LOG_DATA_SAMPLE && console.log('发送反馈数据，Sample: ', tickRes.feedbacksForTraining[0])
             }
@@ -104,7 +109,7 @@ const MainStage = ({ setCnt, setCells, cells, setSelectedCell, setCurrentRound, 
 
             return tickRes.newCells;
         });
-    }, [userPaused, ws.allReady, cells, ws.tickPending]);
+    }, [userPaused, ws.allReady, ws.tickPending]);
 
     useTick(tickCallback)
 

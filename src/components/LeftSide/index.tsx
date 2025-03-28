@@ -1,4 +1,4 @@
-import { JSX, SetStateAction, useEffect, useRef, useState } from "react";
+import { JSX, SetStateAction, useEffect, useState } from "react";
 
 interface Props {
   cells: ICell[]
@@ -32,7 +32,7 @@ export default function LeftSide({ cells, cnt, currentRound, setUserPaused, user
     return () => {
       clearInterval(interval);
     };
-  }, [currentRound]); // 只监听 currentRound 变化
+  }, [currentRound, userPaused]);
 
   useEffect(() => {
     if (roundSecond > maxRoundSecond) {

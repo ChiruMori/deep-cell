@@ -1,6 +1,8 @@
 import { useEffect, useState } from 'react';
 import useWebSocket, { ReadyState } from 'react-use-websocket'
 
+const LOG_SOCKET_LIFECYCLE = false;
+
 export const useWebSockets = () => {
 
     const [tickPending, setTickPending] = useState(false);
@@ -14,6 +16,12 @@ export const useWebSockets = () => {
     } = useWebSocket('ws://localhost:8000/training/tick', {
         shouldReconnect: () => true,
         reconnectInterval: 3000,
+        onOpen: () => {
+            LOG_SOCKET_LIFECYCLE && console.log('Tick websocket opened');
+        },
+        onClose: () => {
+            LOG_SOCKET_LIFECYCLE && console.log('Tick websocket closed');
+        }
     });
     const {
         sendJsonMessage: sendFbMessage,
@@ -21,10 +29,17 @@ export const useWebSockets = () => {
     } = useWebSocket('ws://localhost:8000/training/apoptosis', {
         shouldReconnect: () => true,
         reconnectInterval: 3000,
+        onOpen: () => {
+            LOG_SOCKET_LIFECYCLE && console.log('Feedback websocket opened');
+        },
+        onClose: () => {
+            LOG_SOCKET_LIFECYCLE && console.log('Feedback websocket closed');
+        }
     });
 
 
     useEffect(() => {
+        LOG_SOCKET_LIFECYCLE && console.log('Received tick message', lastTickMsg);
         // 更新请求状态
         setTickPending(false);
         setLastResTime(Date.now());

@@ -67,18 +67,19 @@ const feedHandle = (provider: ICell, consumer: ICell): void => {
     if (provider.type !== 'erythrocyte' && provider.type !== 'alveolar') {
         return
     }
+    // 自身类型的细胞无法提供养分
     if (provider.type === consumer.type) {
         return
     }
     const maxNeed = typeProperties(consumer.type).hp - consumer.hp;
     const maxProvide = HEAL_CNT * (provider.ml?.kw ?? 0);
-    const feed = Math.max(Math.min(maxNeed, maxProvide, 0), 0);
+    const feed = Math.max(Math.min(maxNeed, maxProvide), 0);
     if (provider.hp <= 0 || provider.hp < feed || provider.hp < consumer.hp) {
         return
     }
-    consumer.hp += feed
-    provider.hp -= feed
-    provider.feed += feed
+    consumer.behaviorHelper.hpChange += feed
+    provider.behaviorHelper.hpChange -= feed
+    provider.behaviorHelper.feed += feed
 }
 const typeProperties = (type: CellType): CellTypeProperties => cellTypesConfig[type];
 const changeAcc = (cell: ICell, rate: number, angle: number): void => {
@@ -106,12 +107,14 @@ export const Cells = {
         id: Math.random().toString(36).substring(2, 15),
         sonCnt: 0,
         lifeTime: 0,
-        feed: 0,
         ml: null,
         mlForView: null,
         behaviorHelper: {
             cd: 0,
             reward: 0,
+            feed: 0,
+            hpChange: 0,
+            sonChange: 0,
         },
     }),
 
@@ -161,8 +164,10 @@ export const Cells = {
             return;
         }
         const nearbyCells = [] as ICell[]
-        cell.feed = 0
         cells.forEach((other) => {
+            if (!other.type) {
+                throw new Error('Error cell type')
+            }
             if (other === cell) {
                 return
             }
@@ -183,7 +188,6 @@ export const Cells = {
                 feedHandle(cell, other);
             }
         })
-        const dead = cell.hp <= 0 || cell.life <= 0
         // 6 个扇形区域
         cell.surround = [0, 0, 0, 0, 0, 0]
         const minDistances = [Infinity, Infinity, Infinity, Infinity, Infinity, Infinity]
@@ -218,10 +222,6 @@ export const Cells = {
             if (distance < minDistances[sectorIndex]) {
                 minDistances[sectorIndex] = distance
                 cell.surround[sectorIndex] = typeAsNumber(other.type)
-                // 当前细胞死亡时，对周围细胞进行标记
-                if (dead) {
-                    other.behaviorHelper.reward -= 0.1;
-                }
             }
         })
     },
@@ -231,9 +231,8 @@ export const Cells = {
             if (!cell.ml) {
                 return null;
             }
-            cell.lifeTime++
-            cell.life = cell.life - 1
-            cell.hp -= 1
+            cell.lifeTime++;
+            cell.behaviorHelper.hpChange -= 1;
             cell.mlForView = cell.ml
             cell.ml = null
             if (cell.behaviorHelper.cd > 0) {
@@ -255,10 +254,16 @@ export const Cells = {
                     }
                     return null;
                 case 'cancer':
-                    // CD 时间到，进行分化
-                    if (cell.life <= 0) {
-                        const types = ['stem', 'erythrocyte', 'alveolar']
-                        const indexByKw = Math.floor(cell.mlForView.kw * types.length)
+                    // 即将死亡，进行分化
+                    if (cell.life <= 1) {
+                        // 该排序需要有一定含义，否则不利于训练
+                        // 按照细胞对生存的帮助进行排序，如干细胞为核心，肺泡为养料核心，红细胞其次，免疫再次
+                        const types = ['stem', 'alveolar', 'erythrocyte']
+                        const indexByKw = Math.floor(cell.mlForView.kw * (types.length - 1))
+                        if (indexByKw > types.length - 1) {
+                            console.error('Error indexByKw', indexByKw)
+                            throw new Error('Error indexByKw')
+                        }
                         // 如果 kw 为 0，则不进行分化，直接死亡
                         if (cell.mlForView.kw !== 0) {
                             cell.type = types[indexByKw] as CellType;
@@ -276,10 +281,7 @@ export const Cells = {
                     // 视线内没有细胞，恢复 HP
                     const alone = cell.surround.filter(s => s <= 0).length === 6
                     if (alone) {
-                        cell.hp += HEAL_CNT;
-                        if (cell.hp > typeProperties(cell.type).hp) {
-                            cell.hp = typeProperties(cell.type).hp;
-                        }
+                        cell.behaviorHelper.hpChange += HEAL_CNT * cell.mlForView.kw;
                     }
                     return null;
                 default:
@@ -291,7 +293,7 @@ export const Cells = {
     typeProperties,
     typeAsText: (type: CellType | null): string => {
         if (!type) {
-            return '-' 
+            return '-'
         }
         return typeProperties(type).shortName
     },

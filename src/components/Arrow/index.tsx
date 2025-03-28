@@ -25,7 +25,7 @@ export default function Arrow(props: ArrowProps): JSX.Element {
                 }}
             >
                 <path
-                    d="M12 2L20 12H15V22H9V12H4L12 2Z"
+                    d="M22 12L12 20V15H2V9H12V4L22 12Z"
                     fill="currentColor"
                     stroke="currentColor"
                     strokeWidth="0.5"

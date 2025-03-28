@@ -1,4 +1,10 @@
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
+from collections import defaultdict
+
+from fastapi.websockets import WebSocketState
+
+from core.models import cell
+from core.models.cell import CELL_TYPE_MAP
 from .nn_models.network import CellNetwork
 import torch
 from collections import deque
@@ -7,19 +13,26 @@ import traceback
 import asyncio
 import os
 import time
+import numpy as np
 
 router = APIRouter()
 
 # 经验回放缓冲区
 class ExperienceBuffer:
-    def __init__(self, max_size=5000):  # 减小缓冲区大小，提高训练效率
+    def __init__(self, max_size=5000):
+        # 缓冲区
         self.buffer = deque(maxlen=max_size)
+        self.priority = deque(maxlen=max_size)
         
-    def add(self, experience):
+    def add(self, experience, priority=1.0):
         self.buffer.append(experience)
+        self.priority.append(priority)
         
     def sample(self, batch_size):
-        return random.sample(list(self.buffer), min(batch_size, len(self.buffer)))
+        # 使用优先级采样
+        probabilities = np.array(self.priority) / sum(self.priority)
+        indices = np.random.choice(len(self.buffer), batch_size, p=probabilities)
+        return [self.buffer[i] for i in indices]
     
     def __len__(self):
         return len(self.buffer)
@@ -37,14 +50,17 @@ class TrainingLogger:
 
 # 全局变量
 logger = TrainingLogger()
-model = CellNetwork()
-optimizer = torch.optim.Adam(model.parameters(), lr=0.005)  # 学习率
-experience_buffer = ExperienceBuffer()
-training_iterations = 0
+models = {
+    'cancer': CellNetwork('cancer'),
+    'erythrocyte': CellNetwork('erythrocyte'),
+    'alveolar': CellNetwork('alveolar'),
+    'stem': CellNetwork('stem')
+}
+# AdamW优化器
+optimizers = {k: torch.optim.AdamW(v.parameters(), lr=0.001) for k, v in models.items()}
+experience_buffers = {k: ExperienceBuffer() for k in models.keys()}
+training_iterations = defaultdict(int)  # 改为按类型记录训练次数
 active_connections = set()  # 跟踪活动连接
-
-# 设置模型为评估模式以提高推理速度
-model.eval()
 
 # WebSocket连接管理器
 class ConnectionManager:
@@ -65,17 +81,18 @@ class ConnectionManager:
 
 manager = ConnectionManager()
 
-# 简化的训练函数
-async def train_model(batch_size=16, epochs=5):
-    """训练模型"""
-    global training_iterations, optimizer, model, experience_buffer
+async def train_model(cell_type, batch_size=32, epochs=5):
+    """按细胞类型训练模型"""
+    global training_iterations, optimizers, models, experience_buffers
     
-    if len(experience_buffer) < batch_size:
+    if len(experience_buffers[cell_type]) < batch_size:
         return False
         
     try:
-        # 从经验回放缓冲区采样
-        batch = experience_buffer.sample(batch_size)
+        # 从经验回FFER区采样
+        batch = experience_buffers[cell_type].sample(batch_size)
+        
+        print("T2", cell_type)
         
         # 准备训练数据
         states = []
@@ -93,7 +110,7 @@ async def train_model(batch_size=16, epochs=5):
                     state['life'],
                     state['hp'],
                     *state['surround'],
-                    state['speed']
+                    *state['speed']
                 ])
                 
                 actions.append([
@@ -114,15 +131,17 @@ async def train_model(batch_size=16, epochs=5):
         actions_tensor = torch.tensor(actions, dtype=torch.float32)
         rewards_tensor = torch.tensor(rewards, dtype=torch.float32).view(-1, 1)
         
+        print("T3", cell_type)
+        
         # 训练模型
-        model.train()  # 设置为训练模式
+        models[cell_type].train()  # 设置为训练模式
         
         for _ in range(epochs):
             # 清空梯度
-            optimizer.zero_grad()
+            optimizers[cell_type].zero_grad()
             
             # 前向传播
-            predictions = model(states_tensor)
+            predictions = models[cell_type](states_tensor)
             
             # 确保维度匹配
             if predictions.dim() == 1:
@@ -131,34 +150,36 @@ async def train_model(batch_size=16, epochs=5):
             if actions_tensor.dim() == 1:
                 actions_tensor = actions_tensor.unsqueeze(0)
             
-            # 计算损失 - 添加单独的维度权重
-            angle_loss = torch.nn.MSELoss()(predictions[:, 0], actions_tensor[:, 0])
-            strength_loss = torch.nn.MSELoss()(predictions[:, 1], actions_tensor[:, 1]) * 2.0  # 增加强度的训练权重
-            kw_loss = torch.nn.MSELoss()(predictions[:, 2], actions_tensor[:, 2]) * 2.0      # 增加kw的训练权重
-            
-            # 组合损失
-            loss = angle_loss + strength_loss + kw_loss
+            # 损失计算
+            loss_fn = torch.nn.MSELoss()
+            loss = loss_fn(predictions, actions_tensor)  # 统一计算三个维度的损失
             
             # 根据奖励加权损失
-            weighted_loss = loss * (1 + rewards_tensor)
+            # 在训练循环中修改损失计算和优化策略
+            weighted_loss = loss * (1 + 0.5 * rewards_tensor)  # 降低奖励影响系数
             weighted_loss = weighted_loss.mean()
             
-            # 反向传播和参数更新
-            weighted_loss.backward()
-            torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)  # 减小梯度裁剪范围
-            optimizer.step()
+            # 增加梯度裁剪力度
+            torch.nn.utils.clip_grad_norm_(models[cell_type].parameters(), max_norm=1.0)
+            
+            # 添加学习率衰减
+            if training_iterations[cell_type] % 100 == 0:
+                for param_group in optimizers[cell_type].param_groups:
+                    param_group['lr'] *= 0.95
+            optimizers[cell_type].step()
         
+        print("T4", cell_type)
         # 训练完成后设置回评估模式
-        model.eval()
-        training_iterations += 1
-        
+        models[cell_type].eval()
+        # 训练完成后计数器更新
+        training_iterations[cell_type] += 1
         # 降低保存模型的频率
-        if training_iterations % 20 == 0:
-            save_path = f"models/cell_model_{training_iterations}.pt"
+        if training_iterations[cell_type] % 20 == 0:
+            save_path = f"models/{cell_type}_model_{training_iterations[cell_type]}.pt"
             os.makedirs(os.path.dirname(save_path), exist_ok=True)
             torch.save({
-                'model_state_dict': model.state_dict(),
-                'optimizer_state_dict': optimizer.state_dict(),
+                'model_state_dict': models[cell_type].state_dict(),
+                'optimizer_state_dict': optimizers[cell_type].state_dict(),
                 'iterations': training_iterations
             }, save_path)
         
@@ -181,96 +202,93 @@ async def handle_websocket(websocket: WebSocket):
                 data = await asyncio.wait_for(websocket.receive_json(), timeout=5.0)
                 
                 if isinstance(data, list) and len(data) > 0:
-                    # 准备批量处理
-                    responses = []
-                    input_tensors = []
-                    input_map = {}
+                    # 按细胞类型分组数据
+                    grouped_data = defaultdict(list)
+                    input_map = defaultdict(dict)
                     
                     for idx, item in enumerate(data):
                         try:
-                            # 直接使用字典处理输入数据，避免Pydantic验证开销
+                            cell_type = item.get('c_type', 'cancer')  # 获取细胞类型
                             input_id = item.get('id', '')
-                            if not input_id:
-                                continue
-                                
-                            input_map[input_id] = idx
                             
-                            # 确保surround数组有正确的长度
-                            surround = item.get('surround', [0, 0, 0, 0, 0, 0])
-                            if len(surround) < 6:
-                                surround = surround + [0] * (6 - len(surround))
-                            elif len(surround) > 6:
-                                surround = surround[:6]
-                            
-                            input_tensors.append([
+                            # 填充分组数据
+                            grouped_data[cell_type].append([
                                 item.get('c_type', 0),
                                 item.get('life', 0),
                                 item.get('hp', 0),
-                                *surround,
-                                item.get('speed', [0, 0])
+                                *item.get('surround', [0]*6)[:6],  # 确保长度6
+                                *item.get('speed', [0]*2)[:2],  # 确保长度2
                             ])
+                            
+                            # 记录输入映射关系
+                            if not input_map[cell_type]:
+                                input_map[cell_type] = {}
+                            input_map[cell_type][input_id] = idx
                         except Exception as item_e:
                             logger.log(f"处理请求项错误: {item_e}")
                             continue
                     
-                    if input_tensors:
-                        # 转为tensor并进行推理
-                        try:
-                            batch_tensor = torch.tensor(input_tensors, dtype=torch.float32)
-                            with torch.no_grad():
-                                predictions = model(batch_tensor)
-                            
-                            # 格式化输出
-                            if len(input_tensors) == 1:
-                                predictions = predictions.view(1, -1)
-                            
-                            # 提取预测结果 - 直接使用网络输出，网络已经处理好了范围
-                            directions = predictions[:, 0].tolist()
-                            strengths = predictions[:, 1].tolist()
-                            kws = predictions[:, 2].tolist()
-                            
-                            # 记录几个样本的输出，用于调试
-                            if len(input_tensors) > 0:
-                                sample_idx = min(len(directions)-1, random.randint(0, len(directions)-1))
-                                logger.log(f"Sample output: angle={directions[sample_idx]:.4f}, strength={strengths[sample_idx]:.4f}, kw={kws[sample_idx]:.4f}")
-                            
-                            # 生成响应
-                            for item in data:
-                                input_id = item.get('id', '')
-                                if input_id in input_map:
-                                    idx = input_map[input_id]
-                                    if idx < len(directions):
-                                        data_to_send = {
-                                            "id": input_id,
-                                            "angle": directions[idx],
-                                            "strength": strengths[idx],
-                                            "kw": kws[idx]
-                                        }
-                                        responses.append(data_to_send)
-                        except Exception as pred_e:
-                            logger.log(f"模型推理错误: {pred_e}")
-                            # 发生错误时，使用随机值作为后备
-                            for item in data:
+                    responses = []
+                    # 按类型批量推理
+                    for cell_type, type_data in grouped_data.items():
+                        parsed_cell_type = CELL_TYPE_MAP[cell_type]
+                        # print(f'处理类型: {parsed_cell_type}')
+                        if parsed_cell_type not in models:
+                            logger.log(f"未知细胞类型: {cell_type}")
+                            continue
+                        processed_data = []
+                        for sample in type_data:
+                            try:
+                                # 确保每个元素都是浮点数
+                                validated_sample = [float(v) for v in sample]
+                                processed_data.append(validated_sample)
+                            except (TypeError, ValueError) as ve:
+                                logger.log(f"数据格式错误: {sample} | 错误: {ve}")
+                                # 添加默认值防止崩溃
+                                processed_data.append([0.0] * 11)  # 输入维度为11
+                        batch_tensor = torch.tensor(type_data, dtype=torch.float32)
+                        with torch.no_grad():
+                            predictions = models[parsed_cell_type](batch_tensor)
+                        
+                        # 处理预测结果
+                        directions = predictions[:, 0].tolist()
+                        strengths = predictions[:, 1].tolist()
+                        kws = predictions[:, 2].tolist()
+                        # print('预测完成', len(directions), len(strengths), len(kws), len(input_map[cell_type]))
+                        
+                        # 构建响应
+                        for idx, (input_id, orig_idx) in enumerate(input_map[cell_type].items()):
+                            if idx < len(directions):
                                 responses.append({
-                                    "id": item.get('id', ''),
-                                    "angle": random.uniform(0, 6.28),
-                                    "strength": random.uniform(0, 1),
-                                    "kw": random.uniform(0, 1)
+                                    "id": input_id,
+                                    "angle": directions[idx],
+                                    "strength": strengths[idx],
+                                    "kw": kws[idx],
+                                    "type": cell_type
                                 })
+                                
+                        # 记录样本输出
+                        if type_data:
+                            sample_idx = random.randint(0, len(directions)-1)
+                            logger.log(f"[{parsed_cell_type}] Sample: angle={directions[sample_idx]:.2f} strength={strengths[sample_idx]:.2f}")
                     
                     # 发送响应
                     if responses:
                         try:
+                            # print('发送响应')
                             await websocket.send_json(responses)
+                            # print('响应发送完成')
                         except Exception as send_e:
                             logger.log(f"发送响应错误: {send_e}")
+                            traceback.print_exc()
                             break
-                        
+                    else:
+                        print('没有响应数据', responses)
             except asyncio.TimeoutError:
                 # 超时检查连接是否仍然有效
                 try:
-                    # 发送一个ping来确认连接
-                    pong = await websocket.receive_text()
+                    print('Tick 等待数据')
+                    await websocket.receive_text()
                     continue
                 except:
                     # 连接可能已断开
@@ -280,6 +298,7 @@ async def handle_websocket(websocket: WebSocket):
                 break
             except Exception as e:
                 logger.log(f"Tick处理错误: {e}")
+                traceback.print_exc()
                 # 继续循环而不是中断连接
                 continue
     finally:
@@ -297,63 +316,48 @@ async def on_apoptosis(websocket: WebSocket):
             try:
                 # 设置接收超时
                 message = await asyncio.wait_for(websocket.receive_json(), timeout=5.0)
-                
-                if not isinstance(message, dict) or 'type' not in message or 'data' not in message:
-                    continue
-
                 if isinstance(message, list):
-                    # 处理反馈
-                    feedback_count = 0
                     for feedback in message:
                         try:
-                            # 简化验证逻辑
-                            if 'state' not in feedback or 'action' not in feedback:
-                                continue
-                                
                             state = feedback.get('state', {})
+                            cell_type = state.get('c_type')
                             action = feedback.get('action', {})
+                            parsed_cell_type = CELL_TYPE_MAP[cell_type]
                             
-                            # 确保所有必要字段都存在
-                            if not all(k in state for k in ['c_type', 'life', 'hp', 'surround', 'speed']):
-                                continue
+                            # 验证必要字段
+                            required_fields = ['c_type', 'life', 'hp', 'surround', 'speed']
+                            if not all(k in state for k in required_fields):
+                                raise ValueError("Missing required fields in state")
                                 
-                            if not all(k in action for k in ['angle', 'strength']):
-                                continue
-                            
-                            # 计算奖励 (使用传入的奖励或默认值)
-                            immediate_reward = feedback.get('immediate_reward', 0) 
-                            
-                            # 简单处理奖励
-                            immediate_reward = max(min(immediate_reward + random.uniform(-0.1, 0.1), 1.0), -1.0)
-                            
-                            # 添加到经验缓冲区
-                            experience_buffer.add({
+                            print('A1.2', cell_type)
+                            # 添加到对应类型的经验缓冲区
+                            experience = {
                                 'state': state,
                                 'action': action,
-                                'reward': immediate_reward,
+                                'reward': feedback.get('immediate_reward', 0),
                                 'is_terminal': feedback.get('is_terminal', False)
-                            })
-                            feedback_count += 1
-                        except Exception:
+                            }
+                            experience_buffers[parsed_cell_type].add(experience)
+                            
+                            # 触发对应类型的训练
+                            if len(experience_buffers[parsed_cell_type]) >= 32:
+                                await train_model(parsed_cell_type)
+                                
+                        except Exception as e:
+                            logger.log(f"反馈处理错误: {e}")
                             continue
-                    
-                    # 只有当积累足够样本时才训练
-                    if len(experience_buffer) >= 32:
-                        await train_model(batch_size=16, epochs=3)
-                    
             except asyncio.TimeoutError:
-                # 超时检查连接
-                try:
-                    pong = await websocket.receive_text()
-                    continue
-                except:
-                    break
+                # 超时继续等待
+                print(f"反馈等待数据...")
+                continue
             except WebSocketDisconnect:
-                logger.log(f"反馈WebSocket连接断开: {client_id}")
+                logger.log(f"反馈WebSocket客户端连接断开: {client_id}")
                 break
             except Exception as e:
                 logger.log(f"处理反馈错误: {e}")
                 continue
+    except WebSocketDisconnect as e:
+        logger.log(f"连接异常断开: {e}")
     finally:
         manager.disconnect(client_id)
         logger.log(f"关闭反馈WebSocket连接: {client_id}")

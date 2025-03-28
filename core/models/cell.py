@@ -30,3 +30,11 @@ class TrainingFeedback(BaseModel):
     hp: int
     # 最终的细胞类型
     type: str
+
+# 细胞类型转换
+CELL_TYPE_MAP = {
+    1: 'stem',
+    2: 'cancer',
+    3: 'erythrocyte',
+    4: 'alveolar',
+}

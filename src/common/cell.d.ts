@@ -34,6 +34,12 @@ declare interface CellBehaviorProps {
     cd: number;
     // 额外奖励
     reward: number;
+    // 为其他细胞提供的养分
+    feed: number;
+    // 一帧的 hp 变化
+    hpChange: number;
+    // 一帧的子代数量变化
+    sonChange: number;
 }
 
 // 细胞接口
@@ -46,7 +52,6 @@ declare interface ICell extends ICircle, IMovable {
     id: string;
     sonCnt: number;
     lifeTime: number;
-    feed: number;
     // 机器学习返回的参数，细胞根据这个参数来行动，如果没有参数，则本轮跳过该细胞
     ml: ImData | null;
     mlForView: ImDataForView | null;
