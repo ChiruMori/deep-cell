@@ -5,40 +5,20 @@ interface Props {
   cnt: CellTypeCounter,
   currentRound: number,
   setUserPaused: (pause: SetStateAction<boolean>) => void,
+  roundTick: number,
   userPaused: boolean
 }
 
-export default function LeftSide({ cells, cnt, currentRound, setUserPaused, userPaused }: Props): JSX.Element {
+export default function LeftSide({ cells, cnt, currentRound, setUserPaused, roundTick, userPaused }: Props): JSX.Element {
 
-  // 秒数计时（setInterval，当currentRound变化时，重新计时）
-  const [roundSecond, setRoundSecond] = useState(0)
-  const [maxRoundSecond, setMaxRoundSecond] = useState(0)
+  const [maxRoundTick, setMaxRoundTick] = useState(0)
   const [maxCellCnt, setMaxCellCnt] = useState(0)
 
   useEffect(() => {
-    let interval: number;
-    
-    // 只在轮次变化时重置计时
-    const handler = () => {
-      if (!userPaused) {
-        setRoundSecond(prev => prev + 1);
-      }
-    };
-
-    // 初始立即执行一次
-    setRoundSecond(0);
-    interval = setInterval(handler, 1000);
-    
-    return () => {
-      clearInterval(interval);
-    };
-  }, [currentRound, userPaused]);
-
-  useEffect(() => {
-    if (roundSecond > maxRoundSecond) {
-      setMaxRoundSecond(roundSecond)
+    if (roundTick > maxRoundTick) {
+      setMaxRoundTick(roundTick)
     }
-  }, [roundSecond, maxRoundSecond])
+  }, [roundTick, maxRoundTick])
 
   useEffect(() => {
     if (cells.length > maxCellCnt) {
@@ -63,8 +43,8 @@ export default function LeftSide({ cells, cnt, currentRound, setUserPaused, user
         <div>红细胞: {cnt.erythrocyte}</div>
         <div>肺泡细胞: {cnt.alveolar}</div>
         <hr />
-        <div>当前轮次: {currentRound} - {roundSecond}s</div>
-        <div>最长存活时间: {maxRoundSecond}s</div>
+        <div>当前轮次: {currentRound} - {roundTick}Tick</div>
+        <div>最长存活时间: {maxRoundTick}Tick</div>
         <div>最多细胞数: {maxCellCnt}</div>
         <hr />
         <button onClick={() => setUserPaused(!userPaused)}>

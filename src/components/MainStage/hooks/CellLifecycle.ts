@@ -71,10 +71,10 @@ export const useCellLifecycle = () => {
         newCells = newCells.filter((cell) => {
             // 没有接受响应的细胞不处理
             if (!cell.ml) {
-                return true; 
+                return true;
             }
             // 细胞特有行动
-            const born = Cells.actions.step(cell);
+            const born = Cells.actions.step(cell, newCnt);
             if (born) {
                 bornCells.push(born);
             }
@@ -88,14 +88,22 @@ export const useCellLifecycle = () => {
             // 是否存活
             const alive = cell.life > 0 && cell.hp > 0;
             // 奖励函数
-            // HP变化，细胞为其他细胞提供养分，会获得更高奖励，当 hp 低时，获得 hpChange 会获得更高奖励
-            const hpReward = Math.max(0, Math.min((cell.behaviorHelper.hpChange * 0.1 * (1 - cell.hp / Cells.typeProperties(cell.type).hp) + cell.behaviorHelper.feed * 0.2) * 0.4, 0.4));
+            // HP变化，细胞为其他细胞提供养分，会获得更高奖励，hp 越低时，奖励越高
+            const nowHpRatio = cell.hp / Cells.typeProperties(cell.type).hp;
+            const hpReward = Math.max(0, Math.min((
+                // HP 变化，按当前 hp 比例结算，hp比例越低，奖励越高
+                cell.behaviorHelper.hpChange * (1 - nowHpRatio) * 0.1
+                // Feed 奖励
+                + cell.behaviorHelper.feed * 0.2) 
+                * 0.4, 0.4));
             // 成功繁殖（免疫细胞杀死负面细胞，杀死正常细胞时惩罚），40%权重
             const sonReward = Math.max(0, Math.min((cell.behaviorHelper.sonChange > 0 ? 1 : 0) * 0.4, 0.4));
-            // 存活的基础奖励，hp 比例越高奖励越高，最高 0.2
-            const aliveReward = alive ? Math.min(cell.hp / Cells.typeProperties(cell.type).hp * 0.2, 0.2) : 0;
-            // 计算即时奖励：HP变化 + 繁殖奖励 + 存活奖励 + 额外奖励
-            const immediateReward = hpReward + sonReward + aliveReward + cell.behaviorHelper.reward;
+            // S 型曲线奖励，鼓励保持中等HP水平
+            const aliveReward = alive ? Math.min(1 / (1 + Math.exp(-(cell.hp / Cells.typeProperties(cell.type).hp - 0.5) * 10)) * 0.2, 0.2) : -0.2;
+            // 运动奖励，鼓励细胞尝试运动而不是原地不动
+            const moveReward = Math.max(0, Math.min(cell.xSpeed * cell.xSpeed + cell.ySpeed * cell.ySpeed / Cells.typeProperties(cell.type).maxSpeed / Cells.typeProperties(cell.type).maxSpeed) * 0.05, 0.05);
+            // 计算即时奖励
+            const immediateReward = hpReward + sonReward + aliveReward + cell.behaviorHelper.reward + moveReward;
             // 计算后，清除标记
             cell.behaviorHelper.hpChange = 0;
             cell.behaviorHelper.sonChange = 0;
@@ -123,8 +131,8 @@ export const useCellLifecycle = () => {
                 immediate_reward: immediateReward,
                 is_terminal: !alive
             }
-            // 收集实时反馈，仅有存活奖励时，降低收集频率
-            if (!onlyAliveReward && Math.random() < 0.1) {
+            // 收集实时反馈，仅有存活奖励时，降低收集频率（禁用）
+            if (!onlyAliveReward && Math.random() < 1.1) {
                 realtimeFeedbacks.push(exp);
             }
 

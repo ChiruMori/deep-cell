@@ -22,12 +22,13 @@ extend({
 
 const LOG_DATA_SAMPLE = false;
 
-const MainStage = ({ setCnt, setCells, cells, setSelectedCell, setCurrentRound, userPaused }: {
+const MainStage = ({ setCnt, setCells, cells, setSelectedCell, setCurrentRound, setRoundTick, userPaused }: {
     cells: ICell[],
     setCells: (value: SetStateAction<ICell[]>) => void,
     setCnt: (value: SetStateAction<CellTypeCounter>) => void,
     setCurrentRound: (value: SetStateAction<number>) => void,
     setSelectedCell: (value: SetStateAction<ICell | undefined>) => void,
+    setRoundTick: (value: SetStateAction<number>) => void,
     userPaused: boolean,
 }) => {
     const [active, setActive] = useState('')
@@ -81,7 +82,10 @@ const MainStage = ({ setCnt, setCells, cells, setSelectedCell, setCurrentRound, 
             });
             const tickRes = updateCells(prevCells);
             setCnt(tickRes.cnt);
-            setCurrentRound(rnd => tickRes.newRound ? rnd + 1 : rnd);
+            if (tickRes.newRound) {
+                setCurrentRound(rnd => rnd + 1);
+                setRoundTick(0);
+            }
             // 反馈数据
             if (tickRes.feedbacksForTraining && tickRes.feedbacksForTraining.length > 0) {
                 ws.sendFbMessage(tickRes.feedbacksForTraining);
@@ -107,6 +111,7 @@ const MainStage = ({ setCnt, setCells, cells, setSelectedCell, setCurrentRound, 
             LOG_DATA_SAMPLE && console.log('发送tick请求，Sample: ', datas[0])
             ws.sendTickMsg(datas);
 
+            setRoundTick(rnd => rnd + 1);
             return tickRes.newCells;
         });
     }, [userPaused, ws.allReady, ws.tickPending]);

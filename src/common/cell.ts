@@ -1,7 +1,7 @@
 /// <reference path="cell.d.ts" />
 
 // const LOG_CELL_ACTION = false;
-const SPEED_DECAY = 0.95;
+const SPEED_DECAY = 0.98;
 const HEAL_CNT = 10;
 // 细胞分裂的养分消耗
 const SPLIT_NEED = 500;
@@ -83,8 +83,9 @@ const feedHandle = (provider: ICell, consumer: ICell): void => {
 }
 const typeProperties = (type: CellType): CellTypeProperties => cellTypesConfig[type];
 const changeAcc = (cell: ICell, rate: number, angle: number): void => {
-    cell.xAcc = rate * typeProperties(cell.type).maxAcc * Math.cos(angle)
-    cell.yAcc = rate * typeProperties(cell.type).maxAcc * Math.sin(angle)
+    const safeRate = Math.max(Math.min(rate, 1), 0);
+    cell.xAcc = safeRate * typeProperties(cell.type).maxAcc * Math.cos(angle)
+    cell.yAcc = safeRate * typeProperties(cell.type).maxAcc * Math.sin(angle)
 }
 export const Cells = {
     checkHit: (cell: ICell, x: number, y: number): boolean => {
@@ -100,8 +101,8 @@ export const Cells = {
         yAcc: 0,
         type,
         // 调整到 0.3~1 的范围内
-        life: typeProperties(type).life * Math.random() * 0.7 + 0.3,
-        hp: typeProperties(type).hp * Math.random() * 0.7 + 0.3,
+        life: typeProperties(type).life * (Math.random() * 0.7 + 0.3),
+        hp: typeProperties(type).hp * (Math.random() * 0.7 + 0.3),
         surround: [-1, -1, -1, -1, -1, -1],
         bornSurround: [-1, -1, -1, -1, -1, -1],
         id: Math.random().toString(36).substring(2, 15),
@@ -166,7 +167,7 @@ export const Cells = {
         const nearbyCells = [] as ICell[]
         cells.forEach((other) => {
             if (!other.type) {
-                throw new Error('Error cell type')
+                throw new Error('Error cell type');
             }
             if (other === cell) {
                 return
@@ -227,7 +228,7 @@ export const Cells = {
     },
 
     actions: {
-        step: (cell: ICell): ICell | null => {
+        step: (cell: ICell, cnt: CellTypeCounter): ICell | null => {
             if (!cell.ml) {
                 return null;
             }
@@ -256,23 +257,41 @@ export const Cells = {
                 case 'cancer':
                     // 即将死亡，进行分化
                     if (cell.life <= 1) {
-                        // 该排序需要有一定含义，否则不利于训练
-                        // 按照细胞对生存的帮助进行排序，如干细胞为核心，肺泡为养料核心，红细胞其次，免疫再次
-                        const types = ['stem', 'alveolar', 'erythrocyte']
-                        const indexByKw = Math.floor(cell.mlForView.kw * (types.length - 1))
-                        if (indexByKw > types.length - 1) {
-                            console.error('Error indexByKw', indexByKw)
-                            throw new Error('Error indexByKw')
-                        }
-                        // 如果 kw 为 0，则不进行分化，直接死亡
-                        if (cell.mlForView.kw !== 0) {
-                            cell.type = types[indexByKw] as CellType;
-                            cell.life = typeProperties(cell.type).life;
-                            // HP 需要继承的，否则分化成高 hp 细胞将过于有利
-                            // cell.hp = typeProperties(cell.type).hp;
-                            cell.r = typeProperties(cell.type).radius;
-                            cell.bornSurround = [...cell.surround]
-                        }
+                        // 根据行为参数决定分化类型，根据 cnt 进行概率分布，使用行为参数进行实际类型选择
+                        const enabledTypes = ['stem', 'alveolar', 'erythrocyte']
+                        // 数量越多的细胞，命中概率越低
+                        const typeRatios = [] as { type: string, ratio: number }[]
+                        // 计算概率
+                        let amount = 0;
+                        enabledTypes.forEach((type) => {
+                            amount += cnt[type as CellType] || 0
+                        })
+                        enabledTypes.forEach((type) => {
+                            typeRatios.push({
+                                type,
+                                ratio: (cnt[type as CellType] || 0) / (amount || 1),
+                            })
+                        })
+                        // 排序
+                        typeRatios.sort((a, b) => b.ratio - a.ratio)
+                        // 计算概率分布
+                        let sum = 0;
+                        typeRatios.forEach((ratio) => {
+                            sum += ratio.ratio
+                            if (sum >= (cell.mlForView!.kw)) {
+                                cell.type = ratio.type as CellType
+                                if (!cell.type) {
+                                    console.error('分化类型异常', cell.mlForView!.kw, sum, cell.type)
+                                    throw new Error('Error cell type: ' + cell.type)
+                                }
+                                cell.life = typeProperties(cell.type).life;
+                                // HP 需要继承，否则分化成高 hp 细胞将过于有利
+                                // cell.hp = typeProperties(cell.type).hp;
+                                cell.r = typeProperties(cell.type).radius;
+                                cell.bornSurround = [...cell.surround]
+                                return
+                            }
+                        })
                     }
                     return null;
                 case 'erythrocyte':

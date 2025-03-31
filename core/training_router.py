@@ -1,9 +1,9 @@
+import math
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 from collections import defaultdict
 
 from fastapi.websockets import WebSocketState
 
-from core.models import cell
 from core.models.cell import CELL_TYPE_MAP
 from .nn_models.network import CellNetwork
 import torch
@@ -17,7 +17,7 @@ import numpy as np
 
 router = APIRouter()
 
-# 经验回放缓冲区
+# 经验回FFER区
 class ExperienceBuffer:
     def __init__(self, max_size=5000):
         # 缓冲区
@@ -30,9 +30,27 @@ class ExperienceBuffer:
         
     def sample(self, batch_size):
         # 使用优先级采样
-        probabilities = np.array(self.priority) / sum(self.priority)
-        indices = np.random.choice(len(self.buffer), batch_size, p=probabilities)
-        return [self.buffer[i] for i in indices]
+        buffer_len = len(self.buffer)
+        # 添加长度校验
+        if buffer_len < batch_size:
+            return []
+        
+        # 禁止重复采样
+        indices = np.random.choice(buffer_len, batch_size, 
+                                  p=np.array(self.priority)/sum(self.priority), 
+                                  replace=False)
+        
+        # 转换为集合去重并排序
+        sorted_indices = sorted(set(indices), reverse=True)
+        
+        res = [self.buffer[i] for i in indices]
+        
+        # 安全删除逻辑
+        for idx in sorted_indices:
+            del self.buffer[idx]
+            del self.priority[idx]
+            
+        return res
     
     def __len__(self):
         return len(self.buffer)
@@ -57,7 +75,7 @@ models = {
     'stem': CellNetwork('stem')
 }
 # AdamW优化器
-optimizers = {k: torch.optim.AdamW(v.parameters(), lr=0.001) for k, v in models.items()}
+optimizers = {k: torch.optim.AdamW(v.parameters(), lr=0.001, betas=(0.9, 0.999)) for k, v in models.items()}
 experience_buffers = {k: ExperienceBuffer() for k in models.keys()}
 training_iterations = defaultdict(int)  # 改为按类型记录训练次数
 active_connections = set()  # 跟踪活动连接
@@ -81,6 +99,19 @@ class ConnectionManager:
 
 manager = ConnectionManager()
 
+# 损失计算
+def angular_loss(pred, target):
+    # 将动作分解为sin/cos分量
+    pred_sin = pred[:, 0]
+    pred_cos = pred[:, 1]
+    target_rad = target[:, 0]  # 原始角度值
+    target_sin = torch.sin(target_rad)
+    target_cos = torch.cos(target_rad)
+    
+    # 计算余弦相似度损失
+    cos_loss = 1 - (pred_sin * target_sin + pred_cos * target_cos).mean()
+    return cos_loss
+
 async def train_model(cell_type, batch_size=32, epochs=5):
     """按细胞类型训练模型"""
     global training_iterations, optimizers, models, experience_buffers
@@ -89,10 +120,8 @@ async def train_model(cell_type, batch_size=32, epochs=5):
         return False
         
     try:
-        # 从经验回FFER区采样
+        # 从经验回FFER区采样并从缓冲区中移除
         batch = experience_buffers[cell_type].sample(batch_size)
-        
-        print("T2", cell_type)
         
         # 准备训练数据
         states = []
@@ -131,50 +160,54 @@ async def train_model(cell_type, batch_size=32, epochs=5):
         actions_tensor = torch.tensor(actions, dtype=torch.float32)
         rewards_tensor = torch.tensor(rewards, dtype=torch.float32).view(-1, 1)
         
-        print("T3", cell_type)
-        
         # 训练模型
         models[cell_type].train()  # 设置为训练模式
         
         for _ in range(epochs):
             # 清空梯度
             optimizers[cell_type].zero_grad()
-            
+            # 输入特征归一化
+            states_tensor = (states_tensor - states_tensor.mean(dim=0)) / (states_tensor.std(dim=0) + 1e-8)
+            # 添加输入噪声
+            noisy_states = states_tensor + torch.randn_like(states_tensor) * 0.1
             # 前向传播
-            predictions = models[cell_type](states_tensor)
-            
-            # 确保维度匹配
-            if predictions.dim() == 1:
-                predictions = predictions.unsqueeze(0)
-                
-            if actions_tensor.dim() == 1:
-                actions_tensor = actions_tensor.unsqueeze(0)
-            
+            predictions = models[cell_type](noisy_states)
             # 损失计算
-            loss_fn = torch.nn.MSELoss()
-            loss = loss_fn(predictions, actions_tensor)  # 统一计算三个维度的损失
-            
+            strength_loss = torch.nn.functional.mse_loss(predictions[:, 2], actions_tensor[:, 1])
+            kw_loss = torch.nn.functional.mse_loss(predictions[:, 3], actions_tensor[:, 2])
+            # 熵奖励，鼓励探索
+            entropy_bonus = -0.1 * (kw_loss * torch.log(kw_loss)).mean()
+            total_loss = angular_loss(predictions, actions_tensor) + strength_loss * 0.5 + kw_loss * 0.3 + entropy_bonus
+
             # 根据奖励加权损失
             # 在训练循环中修改损失计算和优化策略
-            weighted_loss = loss * (1 + 0.5 * rewards_tensor)  # 降低奖励影响系数
-            weighted_loss = weighted_loss.mean()
+            reward_coef = torch.sigmoid(rewards_tensor) * 0.2  # 限制奖励影响在0-0.2之间
+            weighted_loss = (total_loss * (1 + reward_coef)).mean()
+            # 梯度裁剪力度
+            torch.nn.utils.clip_grad_norm_(models[cell_type].parameters(), max_norm=0.5)
             
-            # 增加梯度裁剪力度
-            torch.nn.utils.clip_grad_norm_(models[cell_type].parameters(), max_norm=1.0)
+            # 学习率衰减
+            if training_iterations[cell_type] % 10 == 0:
+                params = [p.data.abs().mean() for p in models[cell_type].parameters()]
+                logger.log(f"[{cell_type}] Params mean: {sum(params)/len(params):.4f}")
             
-            # 添加学习率衰减
-            if training_iterations[cell_type] % 100 == 0:
-                for param_group in optimizers[cell_type].param_groups:
-                    param_group['lr'] *= 0.95
+            weighted_loss.backward()
             optimizers[cell_type].step()
+
+            # 在经验回放采样时增加随机探索率
+            exploration_rate = max(0.1, 1 - training_iterations[cell_type] / 200)  # 200轮后保持10%探索
+            if random.random() < exploration_rate:
+                # 添加随机扰动到预测结果
+                predictions += torch.randn_like(predictions) * 0.2
         
-        print("T4", cell_type)
         # 训练完成后设置回评估模式
         models[cell_type].eval()
         # 训练完成后计数器更新
         training_iterations[cell_type] += 1
+        print(f"[{cell_type}] 训练完成, 迭代次数: {training_iterations[cell_type]}")
         # 降低保存模型的频率
         if training_iterations[cell_type] % 20 == 0:
+            print(f"[{cell_type}] 保存模型")
             save_path = f"models/{cell_type}_model_{training_iterations[cell_type]}.pt"
             os.makedirs(os.path.dirname(save_path), exist_ok=True)
             torch.save({
@@ -191,12 +224,14 @@ async def train_model(cell_type, batch_size=32, epochs=5):
 
 @router.websocket("/training/tick")
 async def handle_websocket(websocket: WebSocket):
+    print('Tick 连接建立')
     client_id = f"tick_{time.time()}"
     await manager.connect(websocket, client_id)
     logger.log(f"Tick WebSocket连接已建立: {client_id}")
     
     try:
-        while True:
+        
+        while websocket.client_state == WebSocketState.CONNECTED:
             try:
                 # 设置接收超时
                 data = await asyncio.wait_for(websocket.receive_json(), timeout=5.0)
@@ -208,12 +243,12 @@ async def handle_websocket(websocket: WebSocket):
                     
                     for idx, item in enumerate(data):
                         try:
-                            cell_type = item.get('c_type', 'cancer')  # 获取细胞类型
+                            cell_type = item.get('c_type')
                             input_id = item.get('id', '')
                             
                             # 填充分组数据
                             grouped_data[cell_type].append([
-                                item.get('c_type', 0),
+                                cell_type,
                                 item.get('life', 0),
                                 item.get('hp', 0),
                                 *item.get('surround', [0]*6)[:6],  # 确保长度6
@@ -234,7 +269,7 @@ async def handle_websocket(websocket: WebSocket):
                         parsed_cell_type = CELL_TYPE_MAP[cell_type]
                         # print(f'处理类型: {parsed_cell_type}')
                         if parsed_cell_type not in models:
-                            logger.log(f"未知细胞类型: {cell_type}")
+                            print(f"未知细胞类型: {cell_type}")
                             continue
                         processed_data = []
                         for sample in type_data:
@@ -243,25 +278,27 @@ async def handle_websocket(websocket: WebSocket):
                                 validated_sample = [float(v) for v in sample]
                                 processed_data.append(validated_sample)
                             except (TypeError, ValueError) as ve:
-                                logger.log(f"数据格式错误: {sample} | 错误: {ve}")
+                                print(f"数据格式错误: {sample} | 错误: {ve}")
+                                traceback.print_exc()
                                 # 添加默认值防止崩溃
                                 processed_data.append([0.0] * 11)  # 输入维度为11
                         batch_tensor = torch.tensor(type_data, dtype=torch.float32)
                         with torch.no_grad():
                             predictions = models[parsed_cell_type](batch_tensor)
                         
-                        # 处理预测结果
-                        directions = predictions[:, 0].tolist()
-                        strengths = predictions[:, 1].tolist()
-                        kws = predictions[:, 2].tolist()
-                        # print('预测完成', len(directions), len(strengths), len(kws), len(input_map[cell_type]))
+                        # 处理预测结果（需要同步修改输出维度）
+                        angle_sin = predictions[:, 0].tolist()
+                        angle_cos = predictions[:, 1].tolist()
+                        strengths = predictions[:, 2].tolist()
+                        kws = predictions[:, 3].tolist()  # 注意索引位置变化
                         
                         # 构建响应
-                        for idx, (input_id, orig_idx) in enumerate(input_map[cell_type].items()):
-                            if idx < len(directions):
+                        for idx, (input_id, _) in enumerate(input_map[cell_type].items()):
+                            if idx < len(angle_sin):
+                                actual_angle = math.atan2(angle_sin[idx], angle_cos[idx]) % (2 * math.pi)
                                 responses.append({
                                     "id": input_id,
-                                    "angle": directions[idx],
+                                    "angle": actual_angle,  # 使用计算后的实际角度
                                     "strength": strengths[idx],
                                     "kw": kws[idx],
                                     "type": cell_type
@@ -269,8 +306,9 @@ async def handle_websocket(websocket: WebSocket):
                                 
                         # 记录样本输出
                         if type_data:
-                            sample_idx = random.randint(0, len(directions)-1)
-                            logger.log(f"[{parsed_cell_type}] Sample: angle={directions[sample_idx]:.2f} strength={strengths[sample_idx]:.2f}")
+                            sample_idx = random.randint(0, len(angle_sin)-1)
+                            sample_angle = math.atan2(angle_sin[sample_idx], angle_cos[sample_idx]) % (2 * math.pi)
+                            logger.log(f"[{parsed_cell_type}] Sample: angle={sample_angle:.2f} strength={strengths[sample_idx]:.2f}")
                     
                     # 发送响应
                     if responses:
@@ -292,6 +330,7 @@ async def handle_websocket(websocket: WebSocket):
                     continue
                 except:
                     # 连接可能已断开
+                    traceback.print_exc()
                     break
             except WebSocketDisconnect:
                 logger.log(f"WebSocket连接断开: {client_id}")
@@ -328,8 +367,6 @@ async def on_apoptosis(websocket: WebSocket):
                             required_fields = ['c_type', 'life', 'hp', 'surround', 'speed']
                             if not all(k in state for k in required_fields):
                                 raise ValueError("Missing required fields in state")
-                                
-                            print('A1.2', cell_type)
                             # 添加到对应类型的经验缓冲区
                             experience = {
                                 'state': state,
@@ -338,6 +375,7 @@ async def on_apoptosis(websocket: WebSocket):
                                 'is_terminal': feedback.get('is_terminal', False)
                             }
                             experience_buffers[parsed_cell_type].add(experience)
+                            # print('add', parsed_cell_type, len(experience_buffers[parsed_cell_type]))
                             
                             # 触发对应类型的训练
                             if len(experience_buffers[parsed_cell_type]) >= 32:
@@ -361,3 +399,5 @@ async def on_apoptosis(websocket: WebSocket):
     finally:
         manager.disconnect(client_id)
         logger.log(f"关闭反馈WebSocket连接: {client_id}")
+
+print(f"[路由注册] WebSocket端点已加载")

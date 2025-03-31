@@ -1,3 +1,4 @@
+import math
 from torch import nn
 import torch.nn.functional as F
 import torch
@@ -41,15 +42,16 @@ class CellNetwork(nn.Module):
     def _initialize_weights(self):
         for m in self.modules():
             if isinstance(m, nn.Linear):
-                nn.init.kaiming_uniform_(m.weight, a=0.1, mode='fan_in', nonlinearity='leaky_relu')
+                # 使用正态分布初始化 + 随机扰动
+                nn.init.normal_(m.weight, mean=0.0, std=0.3)
                 if m.bias is not None:
-                    nn.init.constant_(m.bias, 0)
-        
-        # 细胞类型特定的初始化
+                    nn.init.uniform_(m.bias, -0.1, 0.1)
+        # 输出层特殊初始化
         with torch.no_grad():
-            # 全部参数均初始化为0.5输出
-            self.type_specific.bias.data.fill_(0.5)
-            self.type_specific.weight.data.fill_(0.5)
+            # 角度层初始化到π附近
+            self.angle_layer.weight.data.uniform_(-3.14, 3.14)
+            # 强度层初始化到中间值
+            self.strength_layer.bias.data.fill_(0.5)
 
     def forward(self, x):
         # 确保输入张量的形状正确
@@ -64,13 +66,18 @@ class CellNetwork(nn.Module):
         # 细胞类型特定处理
         x = F.leaky_relu(self.type_specific(x), 0.1)
         
-        # 角度输出 - 标准化到 0-2π
-        angle = torch.sigmoid(self.angle_layer(x)) * 6.28319
+        # 角度输出：分解为sin/cos分量 + 相位学习
+        angle_feat = self.angle_layer(x)
+        # 直接学习相位参数
+        angle_sin = torch.sin(angle_feat)
+        angle_cos = torch.cos(angle_feat)
 
-        # 强度输出 - 直接使用sigmoid
-        strength = torch.sigmoid(self.strength_layer(x))
+        # 强度输出 - 使用sigmoid
+        strength = torch.sigmoid(self.strength_layer(x)) * 1.0
 
-        # 行为参数 - 移除复杂调制
-        kw = torch.sigmoid(self.behavior_layer(x))
+        # 行为参数 - 添加噪声并限制数值范围
+        kw_base = torch.sigmoid(self.behavior_layer(x))
+        kw_noise = torch.randn_like(x[:, :1]) * 0.1
+        kw = (kw_base + kw_noise).clamp(min=0.0, max=1.0)
 
-        return torch.cat([angle, strength, kw], dim=1)
+        return torch.cat([angle_sin, angle_cos, strength, kw], dim=1)
