@@ -101,7 +101,7 @@ export const useCellLifecycle = () => {
             // S 型曲线奖励，鼓励保持中等HP水平
             const aliveReward = alive ? Math.min(1 / (1 + Math.exp(-(cell.hp / Cells.typeProperties(cell.type).hp - 0.5) * 10)) * 0.2, 0.2) : -0.2;
             // 运动奖励，鼓励细胞尝试运动而不是原地不动
-            const moveReward = Math.max(0, Math.min(cell.xSpeed * cell.xSpeed + cell.ySpeed * cell.ySpeed / Cells.typeProperties(cell.type).maxSpeed / Cells.typeProperties(cell.type).maxSpeed) * 0.05, 0.05);
+            const moveReward = Math.max(0, Math.min(cell.xSpeed * cell.xSpeed + cell.ySpeed * cell.ySpeed / Cells.typeProperties(cell.type).maxSpeed / Cells.typeProperties(cell.type).maxSpeed) * 0.2, 0.2);
             // 计算即时奖励
             const immediateReward = hpReward + sonReward + aliveReward + cell.behaviorHelper.reward + moveReward;
             // 计算后，清除标记

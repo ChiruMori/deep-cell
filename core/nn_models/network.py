@@ -50,8 +50,8 @@ class CellNetwork(nn.Module):
         with torch.no_grad():
             # 角度层初始化到π附近
             self.angle_layer.weight.data.uniform_(-3.14, 3.14)
-            # 强度层初始化到中间值
-            self.strength_layer.bias.data.fill_(0.5)
+            # 初始化强度到较大值，增大运动倾向
+            self.strength_layer.bias.data.fill_(0.8)
 
     def forward(self, x):
         # 确保输入张量的形状正确
@@ -72,8 +72,8 @@ class CellNetwork(nn.Module):
         angle_sin = torch.sin(angle_feat)
         angle_cos = torch.cos(angle_feat)
 
-        # 强度输出 - 使用sigmoid
-        strength = torch.sigmoid(self.strength_layer(x)) * 1.0
+        # 强度输出 - 使用sigmoid（增加温度系数）
+        strength = torch.sigmoid(self.strength_layer(x) / 0.5) * 1.0
 
         # 行为参数 - 添加噪声并限制数值范围
         kw_base = torch.sigmoid(self.behavior_layer(x))

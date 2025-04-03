@@ -177,8 +177,16 @@ async def train_model(cell_type, batch_size=32, epochs=5):
             kw_loss = torch.nn.functional.mse_loss(predictions[:, 3], actions_tensor[:, 2])
             # 熵奖励，鼓励探索
             entropy_bonus = -0.1 * (kw_loss * torch.log(kw_loss)).mean()
-            total_loss = angular_loss(predictions, actions_tensor) + strength_loss * 0.5 + kw_loss * 0.3 + entropy_bonus
-
+            total_loss = (
+                # 方向损失
+                angular_loss(predictions, actions_tensor) * 0.3 +
+                # 强度损失 
+                strength_loss * 1.5 +
+                # 行为参数损失
+                kw_loss * 0.1 +
+                # 熵奖励 
+                entropy_bonus
+            )
             # 根据奖励加权损失
             # 在训练循环中修改损失计算和优化策略
             reward_coef = torch.sigmoid(rewards_tensor) * 0.2  # 限制奖励影响在0-0.2之间
@@ -195,7 +203,9 @@ async def train_model(cell_type, batch_size=32, epochs=5):
             optimizers[cell_type].step()
 
             # 在经验回放采样时增加随机探索率
-            exploration_rate = max(0.1, 1 - training_iterations[cell_type] / 200)  # 200轮后保持10%探索
+            current_iter = training_iterations[cell_type]
+            # S型衰减
+            exploration_rate = 0.5 * (1 / (1 + np.exp(-current_iter/50))) + 0.1
             if random.random() < exploration_rate:
                 # 添加随机扰动到预测结果
                 predictions += torch.randn_like(predictions) * 0.2
